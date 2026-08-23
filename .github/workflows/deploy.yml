@@ -1,0 +1,90 @@
+name: Rialo Contract Build & Deploy Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Target Rialo Network'
+        required: true
+        default: 'devnet'
+        type: choice
+        options:
+          - devnet
+          - testnet
+      deploy_contract:
+        description: 'Deploy contract after successful compilation'
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-contract:
+    name: Build Rialo Smart Contract (PolkaVM & WASM)
+    runs-on: ubuntu-latest
+    container:
+      image: rust:bookworm
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Install System Linkers & Build Dependencies
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev curl git clang llvm binaryen ca-certificates
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Setup Rust Toolchain & WASM Targets
+        run: |
+          rustup default stable
+          rustup target add wasm32-wasip1 || rustup target add wasm32-wasi
+          rustup target add wasm32-unknown-unknown
+
+      - name: Cargo Cache Setup
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            contracts/rexo-core/target/
+          key: ${{ runner.os }}-cargo-rialo-${{ hashFiles('contracts/rexo-core/Cargo.toml', 'contracts/rexo-core/artifact/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rialo-
+
+      - name: Run Mathematical Curve Unit Tests
+        run: |
+          cd contracts/rexo-core
+          if [ -f "src/curve.rs" ]; then
+            rustc --test src/curve.rs -o /tmp/curve_test && /tmp/curve_test
+          fi
+
+      - name: Build Contract Artifacts
+        run: |
+          cd contracts/rexo-core
+          echo "==> Compiling Rexo Rialo Contract Artifacts..."
+          cargo build --manifest-path artifact/Cargo.toml --release || cargo build --manifest-path artifact/Cargo.toml
+
+      - name: Package Build Artifacts
+        run: |
+          mkdir -p build-output
+          find contracts/rexo-core/target -type f \( -name "*.wasm" -o -name "*.blob" -o -name "*.polkavm" \) -exec cp {} build-output/ \; 2>/dev/null || true
+          cp -r contracts/rexo-core/wit build-output/ 2>/dev/null || true
+          cp contracts/rexo-core/Cargo.toml build-output/
+
+      - name: Upload Contract Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rialo-contract-artifacts
+          path: build-output/
+          retention-days: 14
