@@ -1,0 +1,40 @@
+[package]
+name = "coldstart"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Meme coin launchpad native untuk Rialo"
+
+# ---------------------------------------------------------------------------
+# JANGAN TEBAK NAMA CRATE VENUS PDK.
+#
+# Salin blok [dependencies] dari Cargo.toml root di
+# https://github.com/SubzeroLabs/rialo-examples — di sana versinya sudah
+# di-pin ke crate yang benar-benar dipublikasikan, jadi build-nya
+# standalone dengan toolchain Rust biasa.
+#
+#   git clone https://github.com/SubzeroLabs/rialo-examples
+#   cd rialo-examples && cargo check --workspace
+#   cp -r venus/http-fetch ~/coldstart-live
+#
+# Kalau contoh yang kamu salin punya blok `rex {}`, ikut bawa
+# wit/rex-component.wit. Macro Venus membacanya saat build di luar
+# monorepo, dan crate yang dipublikasikan tidak menyertakannya.
+# ---------------------------------------------------------------------------
+
+[dependencies]
+rialo-venus = { version = "0.10.1" }
+rialo-venus-dsl = { version = "0.10.1" }
+rialo-types = { version = "0.10.1" }
+
+[lib]
+path = "src/lib.rs"
+
+# ---------------------------------------------------------------------------
+# src/curve.rs sengaja tanpa dependency dan bisa diuji sendiri:
+#   rustc --test src/curve.rs -o /tmp/curve_test && /tmp/curve_test
+#
+# `rialo client program deploy-venus` mengharapkan crate `artifact/`
+# tiga-file di samping program. Salin bentuknya dari tutorial
+# "Fetch web data from a program" di docs.rialo.io.
+# ---------------------------------------------------------------------------
