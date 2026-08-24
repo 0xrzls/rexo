@@ -1,3 +1,7 @@
+# =============================================================================
+# Rialo Contract Build & Deploy Pipeline
+# =============================================================================
+
 name: Rialo Contract Build & Deploy Pipeline
 
 on:
@@ -26,245 +30,217 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CONTRACT_DIR: contracts/rexo-core
+  RIALO_TOOLCHAIN_VERSION: "0.10.1"
+
 jobs:
-  # --------------------------------------------------------------------------
-  # 1. Native Ubuntu Runner: Rust Toolchain & Rialo Contract Compilation
-  # --------------------------------------------------------------------------
-  build-contract:
-    name: Compile Rialo Smart Contract (Venus PDK / WASM)
+  # ===========================================================================
+  # JOB 1 — Test matematika kurva
+  # ===========================================================================
+  curve-tests:
+    name: Curve Math Invariants (21 tests)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run curve invariant tests
+        run: |
+          CURVE_SRC="${CONTRACT_DIR}/src/curve.rs"
+          test -f "$CURVE_SRC" || { echo "::error::curve.rs tidak ditemukan di $CURVE_SRC"; exit 1; }
+          rustc --test "$CURVE_SRC" -o /tmp/curve_test
+          /tmp/curve_test --nocapture
+
+  # ===========================================================================
+  # JOB 2 — Build kontrak Venus PDK
+  # ===========================================================================
+  build-contract:
+    name: Compile Rialo Smart Contract (Venus PDK)
+    runs-on: ubuntu-latest
+    needs: curve-tests
 
     steps:
-      - name: Checkout Code Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install System Build Dependencies & Linkers
+      - name: Install system build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            pkg-config \
-            libssl-dev \
-            curl \
-            git \
-            clang \
-            llvm \
-            binaryen \
-            ca-certificates
+            build-essential pkg-config libssl-dev curl git \
+            clang llvm binaryen ca-certificates cmake
 
-      - name: Setup Rust Stable & WebAssembly Compilation Targets
+      - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
 
-      - name: Setup Cargo Cache for Fast Rebuilds
+      - name: Cache Rialo toolchain
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
+            ~/.rialo
+            ~/.rialoman
+          key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
+          restore-keys: ${{ runner.os }}-rialo-rust-
+
+      - name: Install rialoman
+        run: |
+          curl -sSf https://install.rialo.io/rialoman.sh | sh
+          echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
+
+      - name: Discover available toolchains
+        continue-on-error: true
+        run: |
+          rialoman --version || true
+          echo "=== terpasang ==="
+          rialoman toolchain list || true
+          echo "=== tersedia ==="
+          rialoman toolchain list --available || rialoman toolchain install --help || true
+
+      - name: Install rialo-rust toolchain
+        run: |
+          if rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
+            echo "rialo-rust sudah tersedia (dari cache)"
+          else
+            rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
+          fi
+          rialoman toolchain list
+
+      - name: Locate toolchain path
+        continue-on-error: true
+        run: |
+          ls -la "$HOME" | grep -i rialo || true
+          du -sh "$HOME"/.rialo* 2>/dev/null || true
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            contracts/rexo-core/target/
-            target/
-          key: ${{ runner.os }}-cargo-rialo-${{ hashFiles('contracts/rexo-core/Cargo.toml', 'contracts/rexo-core/artifact/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-rialo-
+            ${{ env.CONTRACT_DIR }}/target/
+            ${{ env.CONTRACT_DIR }}/artifact/target/
+          key: ${{ runner.os }}-cargo-rialo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-rialo-
 
-      - name: Clean Stale Build Artifacts & Output Directory
-        run: |
-          echo "==> Purging old artifacts and initializing clean build directory..."
-          rm -rf build-output/ target/ contracts/rexo-core/target/
-          mkdir -p build-output
-          echo "Clean build directory ready."
-
-      - name: Run Mathematical Curve Unit Tests & Verify Invariants
-        run: |
-          echo "================================================================="
-          echo "==> Running Mathematical Curve Invariants & Unit Tests..."
-          echo "================================================================="
-          CURVE_SRC=""
-          if [ -f "contracts/rexo-core/src/curve.rs" ]; then
-            CURVE_SRC="contracts/rexo-core/src/curve.rs"
-          elif [ -f "src/curve.rs" ]; then
-            CURVE_SRC="src/curve.rs"
-          fi
-
-          if [ -n "$CURVE_SRC" ]; then
-            echo "Found curve source: $CURVE_SRC"
-            rustc --test "$CURVE_SRC" -o /tmp/curve_test
-            /tmp/curve_test --nocapture
-            echo "✅ All bonding curve unit tests passed successfully!"
-          else
-            echo "::error ::No curve.rs source found in workspace!"
-            exit 1
-          fi
-
-      - name: Compile Standalone Rialo WASM Executable
-        run: |
-          echo "================================================================="
-          echo "==> Compiling WebAssembly (WASM) Binary Target..."
-          echo "================================================================="
-          CURVE_SRC=""
-          if [ -f "contracts/rexo-core/src/curve.rs" ]; then
-            CURVE_SRC="contracts/rexo-core/src/curve.rs"
-          elif [ -f "src/curve.rs" ]; then
-            CURVE_SRC="src/curve.rs"
-          fi
-
-          if [ -n "$CURVE_SRC" ]; then
-            echo "Compiling $CURVE_SRC directly to wasm32-unknown-unknown..."
-            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o build-output/rexo_core.wasm
-            ls -lh build-output/rexo_core.wasm
-            echo "✅ WASM binary generated: build-output/rexo_core.wasm ($(stat -c%s build-output/rexo_core.wasm) bytes)"
-          else
-            echo "::error ::No curve.rs source found for WASM compilation!"
-            exit 1
-          fi
-
-      - name: Install Rialo CLI / rialoman Toolchain
-        run: |
-          echo "==> Checking Rialo CLI toolchain manager..."
-          curl -sSf https://install.rialo.io/rialoman.sh | sh || true
-          echo "$HOME/.rialo/bin" >> $GITHUB_PATH
-
-      - name: Compile Rexo Venus PDK Manifest
-        id: compile_pdk
+      - name: Compile Venus PDK artifact
         env:
           RUST_BACKTRACE: "full"
         run: |
-          echo "================================================================="
-          echo "==> Compiling Venus PDK Workspace Manifest (Strict Mode)..."
-          echo "================================================================="
-          if [ -d "contracts/rexo-core" ]; then
-            cd contracts/rexo-core
-            if [ -f "artifact/Cargo.toml" ]; then
-              echo "Executing: cargo build --manifest-path artifact/Cargo.toml --release --verbose"
-              cargo build --manifest-path artifact/Cargo.toml --release --verbose
-            elif [ -f "Cargo.toml" ]; then
-              echo "Executing: cargo build --release --verbose"
-              cargo build --release --verbose
-            fi
-            cd ../..
-          elif [ -f "Cargo.toml" ]; then
-            cargo build --release --verbose
-          else
-            echo "::error ::No Cargo.toml found in contracts/rexo-core or root directory."
+          cd "${CONTRACT_DIR}"
+          test -f artifact/Cargo.toml || { echo "::error::artifact/Cargo.toml tidak ditemukan"; exit 1; }
+          cargo build --manifest-path artifact/Cargo.toml --release --verbose
+
+      - name: Package build artifacts
+        run: |
+          mkdir -p build-output
+          find "${CONTRACT_DIR}" -type f \
+            \( -name "*.polkavm" -o -name "*.blob" -o -name "*.wasm" \) \
+            -not -path "*/.fingerprint/*" \
+            -exec cp -v {} build-output/ \;
+          [ -d "${CONTRACT_DIR}/wit" ] && cp -r "${CONTRACT_DIR}/wit" build-output/ || true
+          ls -la build-output/
+
+      - name: Assert artifact was actually produced
+        run: |
+          COUNT=$(find build-output -type f \
+            \( -name "*.polkavm" -o -name "*.blob" -o -name "*.wasm" \) | wc -l)
+          echo "Artifact ditemukan: ${COUNT}"
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "::error::Build sukses tapi tidak ada artifact. Cek log compile."
             exit 1
           fi
 
-      - name: Package Build Artifacts
-        run: |
-          echo "================================================================="
-          echo "==> Packaging Build Artifacts for Distribution..."
-          echo "================================================================="
-          # Collect all compiled wasm and binary artifacts
-          find contracts/ target/ -type f \( -name "*.wasm" -o -name "*.blob" -o -name "*.json" \) -exec cp {} build-output/ \; 2>/dev/null || true
-          
-          # Collect WIT interfaces & Cargo definitions
-          if [ -d "contracts/rexo-core/wit" ]; then
-            cp -r contracts/rexo-core/wit build-output/ 2>/dev/null || true
-          fi
-          if [ -f "contracts/rexo-core/Cargo.toml" ]; then
-            cp contracts/rexo-core/Cargo.toml build-output/ 2>/dev/null || true
-          fi
-          
-          echo "Packaged Build Artifacts list:"
-          ls -la build-output/
-
-      - name: Upload Contract Artifacts
+      - name: Upload contract artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rialo-contract-artifacts
           path: build-output/
           retention-days: 14
+          if-no-files-found: error
 
-  # --------------------------------------------------------------------------
-  # 2. Automated On-Chain Deployment Job (Venus PDK deploy-venus)
-  # --------------------------------------------------------------------------
+  # ===========================================================================
+  # JOB 3 — Deploy
+  # ===========================================================================
   deploy-contract:
-    name: Deploy Program to Rialo Network
+    name: Deploy Program to ${{ inputs.network }}
     needs: build-contract
-    if: always() && needs.build-contract.result == 'success'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_contract }}
     runs-on: ubuntu-latest
+    environment: ${{ inputs.network }}
 
     steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: rialo-contract-artifacts
           path: ./artifacts
 
-      - name: Verify Compiled Artifacts
+      - name: Verify artifacts present
         run: |
-          echo "==> Verifying compiled artifacts for deployment..."
           ls -la ./artifacts/
-          WASM_FILE=$(find ./artifacts -type f -name "*.wasm" | head -n 1)
-          if [ -n "$WASM_FILE" ]; then
-            echo "Target deployment binary found: $WASM_FILE ($(stat -c%s "$WASM_FILE") bytes)"
-          else
-            echo "::warning ::No standalone .wasm file detected in artifacts root. Checking subdirectories..."
-          fi
+          COUNT=$(find ./artifacts -type f \( -name "*.polkavm" -o -name "*.blob" \) | wc -l)
+          test "${COUNT}" -gt 0 || { echo "::error::Tidak ada blob untuk di-deploy"; exit 1; }
 
-      - name: Setup Rialo CLI Toolchain
+      - name: Restore Rialo toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rialo
+            ~/.rialoman
+          key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
+          restore-keys: ${{ runner.os }}-rialo-rust-
+
+      - name: Install Rialo CLI
         run: |
-          echo "==> Installing Rialo CLI..."
-          if curl -sSf https://install.rialo.io/rialoman.sh | sh; then
-            echo "$HOME/.rialo/bin" >> $GITHUB_PATH
-          fi
+          curl -sSf https://install.rialo.io/rialoman.sh | sh
+          echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
 
-      - name: Execute Rialo Venus Deployment (rialo client program deploy-venus)
+      - name: Verify CLI available
+        run: |
+          command -v rialo || { echo "::error::Binary 'rialo' tidak ada di PATH"; exit 1; }
+          rialo --version
+
+      - name: Configure signing keypair
         env:
           RIALO_DEPLOY_KEY: ${{ secrets.RIALO_DEPLOY_KEY }}
-          RIALO_RPC_URL: ${{ secrets.RIALO_RPC_URL }}
-          TARGET_NETWORK: ${{ github.event.inputs.network || 'devnet' }}
         run: |
-          RPC_ENDPOINT="${RIALO_RPC_URL:-https://devnet.rialo.io:4101}"
-          if [ "$TARGET_NETWORK" = "testnet" ]; then
-            RPC_ENDPOINT="${RIALO_RPC_URL:-https://testnet.rialo.io:4101}"
-          fi
+          test -n "${RIALO_DEPLOY_KEY}" \
+            || { echo "::error::Secret RIALO_DEPLOY_KEY belum diset"; exit 1; }
+          umask 077
+          mkdir -p ~/.config/rialo
+          printf '%s' "${RIALO_DEPLOY_KEY}" > ~/.config/rialo/id.json
+          chmod 600 ~/.config/rialo/id.json
 
-          echo "================================================================="
-          echo "Target Network: $TARGET_NETWORK"
-          echo "RPC Endpoint:   $RPC_ENDPOINT"
-          echo "================================================================="
+      - name: Switch network
+        run: rialo config network switch ${{ inputs.network }}
 
-          if [ -z "$RIALO_DEPLOY_KEY" ]; then
-            echo "::warning ::Repository secret 'RIALO_DEPLOY_KEY' is not configured."
-            echo "To enable automated on-chain broadcast, add 'RIALO_DEPLOY_KEY' (Private Key / Keypair) in GitHub Repo Settings > Secrets and Variables > Actions."
-            echo "Simulating Venus deployment command validation:"
-            echo "> rialo client program deploy-venus --rpc $RPC_ENDPOINT --keypair <SECURE_KEYPAIR> ./artifacts/rexo_core.wasm"
-            exit 0
-          fi
+      - name: Fund deployer
+        run: |
+          rialo client airdrop --amount 1 \
+            || echo "::warning::Airdrop gagal — cek saldo atau rate limit"
 
-          # Locate target wasm artifact
-          WASM_PATH=$(find ./artifacts -type f -name "*.wasm" | head -n 1)
-          if [ -z "$WASM_PATH" ]; then
-            echo "::error ::Cannot deploy: no .wasm artifact found in ./artifacts"
-            exit 1
-          fi
+      - name: Deploy program
+        run: |
+          cd "${CONTRACT_DIR}"
+          rialo client program deploy-venus . | tee /tmp/deploy.log
+          grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}' /tmp/deploy.log | head -1 > /tmp/program_id || true
+          echo "PROGRAM_ID=$(cat /tmp/program_id)" >> "$GITHUB_ENV"
 
-          # Save secret keypair safely to temp file with restricted permissions
-          KEYPAIR_FILE=$(mktemp /tmp/rialo_deploy_key.XXXXXX.json)
-          echo "$RIALO_DEPLOY_KEY" > "$KEYPAIR_FILE"
-          chmod 600 "$KEYPAIR_FILE"
+      - name: Verify deployment
+        run: |
+          test -s /tmp/program_id \
+            || { echo "::error::Tidak ada program id di output deploy"; exit 1; }
+          echo "### Deployed to ${{ inputs.network }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Program ID: ${PROGRAM_ID}" >> "$GITHUB_STEP_SUMMARY"
 
-          echo "==> Broadcasting deployment transaction to Rialo ($TARGET_NETWORK)..."
-          if command -v rialo >/dev/null 2>&1; then
-            rialo client program deploy-venus \
-              --rpc "$RPC_ENDPOINT" \
-              --keypair "$KEYPAIR_FILE" \
-              "$WASM_PATH"
-          else
-            echo "::notice ::Rialo native binary not available in PATH, executing via cargo component/rialo-cli..."
-            cargo run --bin rialo -- client program deploy-venus \
-              --rpc "$RPC_ENDPOINT" \
-              --keypair "$KEYPAIR_FILE" \
-              "$WASM_PATH" || true
-          fi
-
-          rm -f "$KEYPAIR_FILE"
-          echo "==> Deployment execution finished."
+      - name: Wipe keypair
+        if: always()
+        run: shred -u ~/.config/rialo/id.json 2>/dev/null || rm -f ~/.config/rialo/id.json
