@@ -1,4 +1,8 @@
-name: Rialo Smart Contract Build & Deploy Pipeline
+# =============================================================================
+# Rialo Contract Build & Deploy Pipeline
+# =============================================================================
+
+name: Rialo Contract Build & Deploy Pipeline
 
 on:
   push:
@@ -95,7 +99,6 @@ jobs:
           echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
           echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.cargo/bin:$HOME/.rialo/bin:$HOME/.rialoman/bin:$PATH"
-          command -v rialoman || echo "::warning::rialoman binary not found in standard paths"
 
       - name: Discover available toolchains
         continue-on-error: true
@@ -112,11 +115,7 @@ jobs:
             echo "rialo-rust sudah tersedia (dari cache)"
           else
             echo "--> Mencoba menginstal toolchain rialo-rust (default / latest / version)..."
-            rialoman toolchain install rialo-rust || \
-            rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" || \
-            rialoman toolchain install rialo-rust latest || \
-            rialoman toolchain install default || \
-            echo "::warning::Gagal memasang toolchain via rialoman. Mengecek status toolchain lokal..."
+            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install rialo-rust latest ||             rialoman toolchain install default ||             echo "::warning::Gagal memasang toolchain via rialoman. Mengecek status toolchain lokal..."
           fi
           echo "=== Toolchain Terpasang Saat Ini ==="
           rialoman toolchain list || true
@@ -147,8 +146,7 @@ jobs:
           mkdir -p build-output "${CONTRACT_DIR}/build-output"
           CURVE_SRC="${CONTRACT_DIR}/src/curve.rs"
           if [ -f "$CURVE_SRC" ]; then
-            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || \
-            rustc --crate-type=cdylib -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || true
+            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" ||             rustc --crate-type=cdylib -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || true
             cp "${CONTRACT_DIR}/build-output/rexo_core.wasm" build-output/rexo_core.wasm 2>/dev/null || true
             if [ -f "build-output/rexo_core.wasm" ]; then
               echo "✅ WASM binary compiled: build-output/rexo_core.wasm ($(stat -c%s build-output/rexo_core.wasm) bytes)"
@@ -253,9 +251,7 @@ jobs:
           # Pastikan toolchain rialo-rust terpasang jika belum ada di cache
           if ! rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
             echo "--> Toolchain rialo-rust belum ada di cache, menginstal..."
-            rialoman toolchain install rialo-rust || \
-            rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" || \
-            rialoman toolchain install default || true
+            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install default || true
           fi
 
           # Scan seluruh subdirektori bin di dalam ~/.rialo dan ~/.rialoman
@@ -393,7 +389,7 @@ jobs:
           test -s /tmp/program_id || [ -n "${PROGRAM_ID}" ] \
             || { echo "::error::Tidak ada program ID di output deploy"; exit 1; }
           echo "### 🚀 Deployed Successfully to ${{ inputs.network || 'devnet' }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Program ID:** \`${PROGRAM_ID}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Program ID:** `${PROGRAM_ID}`" >> "$GITHUB_STEP_SUMMARY"
           echo "✅ Program ID berhasil diverifikasi on-chain: ${PROGRAM_ID}"
 
       - name: Wipe keypair
