@@ -26,9 +26,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE20: true
-
 jobs:
   # --------------------------------------------------------------------------
   # 1. Native Ubuntu Runner: Rust Toolchain & Rialo Contract Compilation
@@ -99,7 +96,8 @@ jobs:
             /tmp/curve_test --nocapture
             echo "✅ All bonding curve unit tests passed successfully!"
           else
-            echo "ℹ️ Note: Standalone curve.rs not found in workspace."
+            echo "::error ::No curve.rs source found in workspace!"
+            exit 1
           fi
 
       - name: Compile Standalone Rialo WASM Executable
@@ -119,48 +117,40 @@ jobs:
             rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o build-output/rexo_core.wasm
             ls -lh build-output/rexo_core.wasm
             echo "✅ WASM binary generated: build-output/rexo_core.wasm ($(stat -c%s build-output/rexo_core.wasm) bytes)"
+          else
+            echo "::error ::No curve.rs source found for WASM compilation!"
+            exit 1
           fi
 
       - name: Install Rialo CLI / rialoman Toolchain
         run: |
           echo "==> Checking Rialo CLI toolchain manager..."
-          if curl -sSf https://install.rialo.io/rialoman.sh | sh; then
-            echo "rialoman installed successfully."
-            echo "$HOME/.rialo/bin" >> $GITHUB_PATH
-          else
-            echo "::notice ::rialoman script installer skipped, continuing with cargo toolchain..."
-          fi
+          curl -sSf https://install.rialo.io/rialoman.sh | sh || true
+          echo "$HOME/.rialo/bin" >> $GITHUB_PATH
 
-      - name: Compile Rexo Venus PDK Manifest (with Diagnostics)
+      - name: Compile Rexo Venus PDK Manifest
         id: compile_pdk
+        env:
+          RUST_BACKTRACE: "full"
         run: |
           echo "================================================================="
-          echo "==> Attempting Venus PDK Cargo Workspace Compilation..."
+          echo "==> Compiling Venus PDK Workspace Manifest (Strict Mode)..."
           echo "================================================================="
           if [ -d "contracts/rexo-core" ]; then
             cd contracts/rexo-core
-            
-            # Check artifact build first if artifact/Cargo.toml exists
             if [ -f "artifact/Cargo.toml" ]; then
               echo "Executing: cargo build --manifest-path artifact/Cargo.toml --release --verbose"
-              if cargo build --manifest-path artifact/Cargo.toml --release --verbose; then
-                echo "✅ Artifact compilation succeeded."
-              else
-                echo "::warning ::artifact/Cargo.toml build encountered an exit code. Checking root Cargo.toml..."
-                if cargo build --release --verbose; then
-                  echo "✅ Root Cargo.toml compilation succeeded."
-                else
-                  echo "::notice ::Venus PDK design scaffold requires remote Rialo devnet toolchain crates."
-                  echo "::notice ::Proceeding with verified standalone WASM binary generated in build-output/rexo_core.wasm."
-                fi
-              fi
+              cargo build --manifest-path artifact/Cargo.toml --release --verbose
             elif [ -f "Cargo.toml" ]; then
               echo "Executing: cargo build --release --verbose"
-              cargo build --release --verbose || true
+              cargo build --release --verbose
             fi
             cd ../..
           elif [ -f "Cargo.toml" ]; then
-            cargo build --release --verbose || true
+            cargo build --release --verbose
+          else
+            echo "::error ::No Cargo.toml found in contracts/rexo-core or root directory."
+            exit 1
           fi
 
       - name: Package Build Artifacts
