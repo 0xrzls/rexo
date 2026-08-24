@@ -24,7 +24,6 @@ on:
 
 env:
   CONTRACT_DIR: contracts/rexo-core
-  RIALO_TOOLCHAIN_VERSION: "0.10.1"
 
 jobs:
   curve-tests:
@@ -68,14 +67,14 @@ jobs:
           path: |
             ~/.rialo
             ~/.rialoman
-          key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
+          key: ${{ runner.os }}-rialo-rust-latest
           restore-keys: ${{ runner.os }}-rialo-rust-
 
       - name: Install rialoman
         run: cargo install rialoman
 
       - name: Install rialo-rust toolchain
-        run: rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
+        run: rialoman toolchain install rialo-rust
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -144,7 +143,7 @@ jobs:
           path: |
             ~/.rialo
             ~/.rialoman
-          key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
+          key: ${{ runner.os }}-rialo-rust-latest
 
       - name: Install Rialo CLI
         run: cargo install rialoman
