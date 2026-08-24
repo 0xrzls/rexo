@@ -1,7 +1,3 @@
-# =============================================================================
-# Rialo Contract Build & Deploy Pipeline
-# =============================================================================
-
 name: Rialo Contract Build & Deploy Pipeline
 
 on:
@@ -79,10 +75,7 @@ jobs:
         run: cargo install rialoman --version 0.3.0
 
       - name: Install rialo-rust toolchain
-        run: |
-          if ! rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
-             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
-          fi
+        run: rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -166,7 +159,8 @@ jobs:
           printf '%s' "${RIALO_DEPLOY_KEY}" > ~/.config/rialo/id.json
 
       - name: Switch network
-        run: rialo config network switch ${{ inputs.network }}
+        run: |
+          rialo config network switch ${{ inputs.network }}
 
       - name: Fund deployer
         run: |
