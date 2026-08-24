@@ -74,10 +74,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-rialo-
 
-      - name: Prepare Build Output Directory
+      - name: Clean Stale Build Artifacts & Output Directory
         run: |
+          echo "==> Purging old artifacts and initializing clean build directory..."
+          rm -rf build-output/ target/ contracts/rexo-core/target/
           mkdir -p build-output
-          echo "Build directory initialized."
+          echo "Clean build directory ready."
 
       - name: Run Mathematical Curve Unit Tests & Verify Invariants
         run: |
@@ -193,7 +195,7 @@ jobs:
   deploy-contract:
     name: Deploy Program to Rialo Network
     needs: build-contract
-    if: github.event.inputs.deploy_contract == 'true'
+    if: always() && needs.build-contract.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
