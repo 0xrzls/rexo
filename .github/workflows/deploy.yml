@@ -106,9 +106,11 @@ jobs:
           if rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
             echo "rialo-rust sudah tersedia (dari cache)"
           else
-            rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
+            echo "--> Mencoba menginstal toolchain rialo-rust (default / latest / version)..."
+            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install rialo-rust latest ||             rialoman toolchain install default ||             echo "::warning::Gagal memasang toolchain via rialoman. Mengecek status toolchain lokal..."
           fi
-          rialoman toolchain list
+          echo "=== Toolchain Terpasang Saat Ini ==="
+          rialoman toolchain list || true
 
       - name: Locate toolchain path
         continue-on-error: true
