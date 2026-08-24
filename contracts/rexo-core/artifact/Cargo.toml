@@ -1,0 +1,58 @@
+[package]
+name = "coldstart-artifact"
+description = "Pre-compiled Rialo VM artifact for coldstart"
+authors = ["Subzero Labs"]
+license = "Apache-2.0"
+publish = false
+edition = "2021"
+
+[build-dependencies]
+rialo-build-lib = { version = "0.10.1" }
+rialo-venus-build-helper = { version = "0.10.1" }
+
+[lints.rust]
+future_incompatible = "warn"
+nonstandard_style = "warn"
+rust_2018_idioms = "warn"
+unsafe_code = "warn"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(target_feature, values("static-syscalls"))',
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("frozen-abi", "no-entrypoint", "custom-panic", "custom-heap"))',
+    'cfg(msim)',
+    'cfg(fail_points)',
+    'cfg(rialo_simtest_seed_sweep)',
+    'cfg(bazel)',
+]
+
+[lints.clippy]
+all = "warn"
+debug_assert_with_mut_call = "warn"
+empty_enums = "warn"
+exit = "warn"
+expl_impl_clone_on_copy = "warn"
+fallible_impl_from = "warn"
+filter_map_next = "warn"
+float_cmp_const = "warn"
+imprecise_flops = "warn"
+invalid_upcast_comparisons = "warn"
+large_digit_groups = "warn"
+large_stack_arrays = "warn"
+large_types_passed_by_value = "warn"
+linkedlist = "warn"
+lossy_float_literal = "warn"
+macro_use_imports = "warn"
+mutex_integer = "warn"
+option_option = "warn"
+path_buf_push_overwrite = "warn"
+ptr_as_ptr = "warn"
+rc_mutex = "warn"
+ref_option_ref = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+same_functions_in_if_condition = "warn"
+string_add_assign = "warn"
+trait_duplication_in_bounds = "warn"
+zero_sized_map_values = "warn"
