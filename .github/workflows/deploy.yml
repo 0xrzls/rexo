@@ -205,7 +205,6 @@ jobs:
     needs: build-contract
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_contract }}
     runs-on: ubuntu-latest
-    environment: ${{ inputs.network }}
 
     steps:
       - uses: actions/checkout@v4
@@ -275,16 +274,25 @@ jobs:
           which rialo || which rialoman || true
           rialo --version || rialoman --version || true
 
+      # -------------------------------------------------------------------
+      # Membaca secret RIALO_DEPLOY_KEY (atau variable RIALO_DEPLOY_KEY)
+      # -------------------------------------------------------------------
       - name: Configure signing keypair
         env:
-          RIALO_DEPLOY_KEY: ${{ secrets.RIALO_DEPLOY_KEY }}
+          RIALO_DEPLOY_KEY_SECRET: ${{ secrets.RIALO_DEPLOY_KEY }}
+          RIALO_DEPLOY_KEY_VAR: ${{ vars.RIALO_DEPLOY_KEY }}
         run: |
-          test -n "${RIALO_DEPLOY_KEY}" \
-            || { echo "::error::Secret RIALO_DEPLOY_KEY belum diset"; exit 1; }
+          DEPLOY_KEY="${RIALO_DEPLOY_KEY_SECRET:-$RIALO_DEPLOY_KEY_VAR}"
+          if [ -z "${DEPLOY_KEY}" ]; then
+            echo "::error::Secret RIALO_DEPLOY_KEY belum terdeteksi di GitHub Actions!"
+            echo "::notice::Pastikan Anda membuat secret dengan nama 'RIALO_DEPLOY_KEY' di Settings > Secrets and variables > Actions > Repository secrets (Bukan di Environment)."
+            exit 1
+          fi
           umask 077
           mkdir -p ~/.config/rialo
-          printf '%s' "${RIALO_DEPLOY_KEY}" > ~/.config/rialo/id.json
+          printf '%s' "${DEPLOY_KEY}" > ~/.config/rialo/id.json
           chmod 600 ~/.config/rialo/id.json
+          echo "✅ Keypair deployer berhasil dikonfigurasi ($(wc -c < ~/.config/rialo/id.json) bytes)"
 
       - name: Switch network
         run: rialo config network switch ${{ inputs.network }}
