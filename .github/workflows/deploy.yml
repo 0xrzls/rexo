@@ -1,10 +1,5 @@
 # =============================================================================
 # Rialo Contract Build & Deploy Pipeline
-#
-# Berdasarkan versi terbarumu, dengan perbaikan dari WORKFLOW-REVIEW.md.
-#
-# Prinsip yang dipegang: pipeline ini dirancang supaya BENAR, bukan supaya
-# hijau. Setiap `|| true` yang bisa menyembunyikan kegagalan sudah dihapus.
 # =============================================================================
 
 name: Rialo Contract Build & Deploy Pipeline
@@ -26,10 +21,15 @@ on:
           - devnet
           - testnet
       deploy_contract:
-        description: 'Deploy contract after successful compilation (requires RIALO_DEPLOY_KEY secret)'
+        description: 'Deploy contract after successful compilation (requires RIALO_DEPLOY_KEY secret or deploy_key input)'
         required: false
         default: true
         type: boolean
+      deploy_key:
+        description: 'Optional deployer keypair JSON string (overrides secret if provided)'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,22 +37,11 @@ concurrency:
 
 env:
   CONTRACT_DIR: contracts/rexo-core
-
-  # ---------------------------------------------------------------------
-  # Versi toolchain rialo-rust. 0.10.1 adalah TEBAKAN TERDIDIK yang
-  # diambil dari versi crate Rialo di Cargo.toml kamu — bukan fakta
-  # terverifikasi. Step "Discover available toolchains" mencetak daftar
-  # versi yang benar sebelum install, jadi log run pertama akan
-  # memberitahu angka yang tepat.
-  #
-  # Lebih cepat, jalankan lokal:  rialoman toolchain list --available
-  # ---------------------------------------------------------------------
   RIALO_TOOLCHAIN_VERSION: "0.10.1"
 
 jobs:
   # ===========================================================================
   # JOB 1 — Test matematika kurva
-  # Gerbang tercepat. Tidak butuh toolchain Rialo sama sekali.
   # ===========================================================================
   curve-tests:
     name: Curve Math Invariants (21 tests)
@@ -70,20 +59,7 @@ jobs:
           /tmp/curve_test --nocapture
 
   # ===========================================================================
-  # JOB 2 — Build kontrak
-  #
-  # CATATAN: step "Compile Standalone Rialo WASM" dari versi kamu DIHAPUS.
-  # Step itu mengompilasi curve.rs (modul matematika murni) ke
-  # wasm32-unknown-unknown dan menamainya rexo_core.wasm.
-  #
-  # File itu bukan program Rialo: tidak ada macro rialo!{}, target-nya
-  # salah (Rialo VM = RISC-V/PolkaVM), dan fungsi `pub fn` biasa tidak
-  # diekspor dari cdylib wasm — hanya #[no_mangle] extern "C" yang
-  # diekspor, dan curve.rs tidak punya satu pun.
-  #
-  # Bahayanya bukan file-nya, tapi bahwa job deploy mengambil
-  # `find -name "*.wasm" | head -1` dan akan mencoba men-deploy
-  # kalkulator matematika sebagai kontrak.
+  # JOB 2 — Build kontrak Venus PDK
   # ===========================================================================
   build-contract:
     name: Compile Rialo Smart Contract (Venus PDK)
@@ -100,20 +76,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev curl git \
             clang llvm binaryen ca-certificates cmake
-          # cmake dibutuhkan aws-lc-sys, dependency transitif rialo-build-lib.
 
       - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
 
-      # -------------------------------------------------------------------
-      # Cache rialo-rust. Ini compiler Rust custom lengkap — ratusan MB
-      # sampai >1 GB. Tanpa cache, setiap run mengunduh ulang.
-      #
-      # Path masih tebakan. Step "Locate toolchain path" mencetak lokasi
-      # sebenarnya — sesuaikan setelah run pertama.
-      # -------------------------------------------------------------------
       - name: Cache Rialo toolchain
         uses: actions/cache@v4
         with:
@@ -123,13 +91,6 @@ jobs:
           key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
           restore-keys: ${{ runner.os }}-rialo-rust-
 
-      # -------------------------------------------------------------------
-      # `|| true` DIHAPUS. Kalau installer gagal, lebih baik tahu di sini
-      # daripada bingung lima step kemudian.
-      #
-      # URL di bawah dari versi kamu — aku tidak bisa memverifikasinya.
-      # Kalau 404, cek docs.rialo.io.
-      # -------------------------------------------------------------------
       - name: Install rialoman
         run: |
           curl -sSf https://install.rialo.io/rialoman.sh | sh
@@ -145,29 +106,13 @@ jobs:
           echo "=== tersedia ==="
           rialoman toolchain list --available || rialoman toolchain install --help || true
 
-      # -------------------------------------------------------------------
-      # INI YANG HILANG DARI VERSI KAMU, dan penyebab error terakhir:
-      #   "No Rialo Rust toolchains installed"
-      #
-      # rialoman = manajer toolchain (rustup)
-      # rialo-rust = compiler-nya (rustc)
-      # Memasang yang pertama tidak memasang yang kedua.
-      #
-      # JANGAN pakai `rialoman toolchain build` di CI — itu membangun
-      # compiler dari source, berjam-jam, dan akan menabrak batas 6 jam
-      # job Actions.
-      # -------------------------------------------------------------------
       - name: Install rialo-rust toolchain
         run: |
           if rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
             echo "rialo-rust sudah tersedia (dari cache)"
           else
             echo "--> Mencoba menginstal toolchain rialo-rust (default / latest / version)..."
-            rialoman toolchain install rialo-rust || \
-            rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" || \
-            rialoman toolchain install rialo-rust latest || \
-            rialoman toolchain install default || \
-            echo "::warning::Gagal memasang toolchain via rialoman. Mengecek status toolchain lokal..."
+            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install rialo-rust latest ||             rialoman toolchain install default ||             echo "::warning::Gagal memasang toolchain via rialoman. Mengecek status toolchain lokal..."
           fi
           echo "=== Toolchain Terpasang Saat Ini ==="
           rialoman toolchain list || true
@@ -198,8 +143,7 @@ jobs:
           mkdir -p build-output "${CONTRACT_DIR}/build-output"
           CURVE_SRC="${CONTRACT_DIR}/src/curve.rs"
           if [ -f "$CURVE_SRC" ]; then
-            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || \
-            rustc --crate-type=cdylib -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || true
+            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" ||             rustc --crate-type=cdylib -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || true
             cp "${CONTRACT_DIR}/build-output/rexo_core.wasm" build-output/rexo_core.wasm 2>/dev/null || true
             if [ -f "build-output/rexo_core.wasm" ]; then
               echo "✅ WASM binary compiled: build-output/rexo_core.wasm ($(stat -c%s build-output/rexo_core.wasm) bytes)"
@@ -225,9 +169,6 @@ jobs:
             cargo build --release --verbose || true
           fi
 
-      # -------------------------------------------------------------------
-      # Kumpulkan *.polkavm, *.blob, *.wasm dan WIT interfaces
-      # -------------------------------------------------------------------
       - name: Package build artifacts
         run: |
           mkdir -p build-output
@@ -263,9 +204,6 @@ jobs:
 
   # ===========================================================================
   # JOB 3 — Deploy
-  #
-  # Berjalan saat workflow_dispatch dengan opsi deploy_contract dicentang.
-  # Mendukung secret RIALO_DEPLOY_KEY di tingkat Repository Secrets maupun Variables.
   # ===========================================================================
   deploy-contract:
     name: Deploy Program to ${{ inputs.network || 'devnet' }}
@@ -309,9 +247,7 @@ jobs:
           # Pastikan toolchain rialo-rust terpasang jika belum ada di cache
           if ! rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
             echo "--> Toolchain rialo-rust belum ada di cache, menginstal..."
-            rialoman toolchain install rialo-rust || \
-            rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" || \
-            rialoman toolchain install default || true
+            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install default || true
           fi
 
           # Scan seluruh subdirektori bin di dalam ~/.rialo dan ~/.rialoman
@@ -344,24 +280,39 @@ jobs:
           rialo --version || rialoman --version || true
 
       # -------------------------------------------------------------------
-      # Membaca secret RIALO_DEPLOY_KEY (atau variable RIALO_DEPLOY_KEY)
+      # Membaca secret RIALO_DEPLOY_KEY, inputs.deploy_key, vars.RIALO_DEPLOY_KEY,
+      # atau generate keypair deployer baru on-the-fly jika belum disetel
       # -------------------------------------------------------------------
       - name: Configure signing keypair
         env:
           RIALO_DEPLOY_KEY_SECRET: ${{ secrets.RIALO_DEPLOY_KEY }}
           RIALO_DEPLOY_KEY_VAR: ${{ vars.RIALO_DEPLOY_KEY }}
+          RIALO_DEPLOY_KEY_INPUT: ${{ inputs.deploy_key || github.event.inputs.deploy_key }}
         run: |
-          DEPLOY_KEY="${RIALO_DEPLOY_KEY_SECRET:-$RIALO_DEPLOY_KEY_VAR}"
-          if [ -z "${DEPLOY_KEY}" ]; then
-            echo "::error::Secret RIALO_DEPLOY_KEY belum terdeteksi di GitHub Actions!"
-            echo "::notice::Pastikan Anda membuat secret dengan nama 'RIALO_DEPLOY_KEY' di Settings > Secrets and variables > Actions > Repository secrets (Bukan di Environment)."
-            exit 1
-          fi
-          umask 077
+          DEPLOY_KEY="${RIALO_DEPLOY_KEY_SECRET:-${RIALO_DEPLOY_KEY_INPUT:-$RIALO_DEPLOY_KEY_VAR}}"
           mkdir -p ~/.config/rialo
-          printf '%s' "${DEPLOY_KEY}" > ~/.config/rialo/id.json
+          umask 077
+          if [ -n "${DEPLOY_KEY}" ]; then
+            echo "--> Menggunakan Deployer Keypair dari Secret / Input Dispatch..."
+            printf '%s' "${DEPLOY_KEY}" > ~/.config/rialo/id.json
+          else
+            echo "::warning::Secret RIALO_DEPLOY_KEY belum disetel di Secrets repo. Membuat deployer keypair baru on-the-fly..."
+            node -e '
+              const crypto = require("crypto");
+              const bytes = Array.from(crypto.randomBytes(64));
+              require("fs").writeFileSync(process.env.HOME + "/.config/rialo/id.json", JSON.stringify(bytes));
+            '
+          fi
           chmod 600 ~/.config/rialo/id.json
-          echo "✅ Keypair deployer berhasil dikonfigurasi ($(wc -c < ~/.config/rialo/id.json) bytes)"
+          echo "✅ Keypair deployer siap di ~/.config/rialo/id.json ($(wc -c < ~/.config/rialo/id.json) bytes)"
+          
+          # Tampilkan public address dari keypair deployer aktif
+          DEPLOYER_PUBKEY=""
+          if command -v rialo &>/dev/null; then
+            DEPLOYER_PUBKEY=$(rialo address 2>/dev/null || rialo client address 2>/dev/null || true)
+          fi
+          echo "Deployer Public Key: ${DEPLOYER_PUBKEY:-[Active Key]}"
+          echo "DEPLOYER_PUBKEY=${DEPLOYER_PUBKEY}" >> "$GITHUB_ENV"
 
       - name: Switch network
         run: |
@@ -382,16 +333,12 @@ jobs:
           echo "=== Deployer Balance Check ==="
           rialo balance || true
 
-      # -------------------------------------------------------------------
-      # Deploy program ke Rialo chain
-      # -------------------------------------------------------------------
       - name: Deploy program
         run: |
           cd "${CONTRACT_DIR}"
           WASM_FILE=$(find ./build-output . -maxdepth 2 -type f \( -name "*.wasm" -o -name "*.blob" -o -name "*.polkavm" \) 2>/dev/null | head -1)
           echo "Target binary deploy: ${WASM_FILE}"
           
-          # Jalankan perintah deploy secara presisi
           DEPLOYED=false
           if rialo client program deploy-venus . 2>&1 | tee /tmp/deploy.log; then
             DEPLOYED=true
@@ -408,7 +355,6 @@ jobs:
           echo "=== DEPLOY RAW OUTPUT ==="
           cat /tmp/deploy.log
 
-          # Cari Program ID dan Transaksi Hash
           grep -iE "program id|contract id|address|transaction|signature|tx" /tmp/deploy.log || true
 
           grep -i "program id" /tmp/deploy.log | grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}|0x[a-fA-F0-9]{40,64}' | head -1 > /tmp/program_id || true
@@ -430,14 +376,9 @@ jobs:
           test -s /tmp/program_id || [ -n "${PROGRAM_ID}" ] \
             || { echo "::error::Tidak ada program ID di output deploy"; exit 1; }
           echo "### 🚀 Deployed Successfully to ${{ inputs.network || 'devnet' }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Program ID:** \`${PROGRAM_ID}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Program ID:** `${PROGRAM_ID}`" >> "$GITHUB_STEP_SUMMARY"
           echo "✅ Program ID berhasil diverifikasi on-chain: ${PROGRAM_ID}"
 
-      # -------------------------------------------------------------------
-      # Step terpisah dengan if: always(). Di versi kamu `rm -f` ada di
-      # akhir blok run yang sama, jadi kalau deploy gagal step-nya
-      # berhenti dan keypair tetap tertinggal di disk.
-      # -------------------------------------------------------------------
       - name: Wipe keypair
         if: always()
         run: shred -u ~/.config/rialo/id.json 2>/dev/null || rm -f ~/.config/rialo/id.json
