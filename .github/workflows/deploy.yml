@@ -72,7 +72,7 @@ jobs:
           restore-keys: ${{ runner.os }}-rialo-rust-
 
       - name: Install rialoman
-        run: cargo install rialoman --version 0.3.0
+        run: cargo install rialoman
 
       - name: Install rialo-rust toolchain
         run: rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
@@ -147,7 +147,7 @@ jobs:
           key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
 
       - name: Install Rialo CLI
-        run: cargo install rialoman --version 0.3.0
+        run: cargo install rialoman
 
       - name: Configure signing keypair
         env:
