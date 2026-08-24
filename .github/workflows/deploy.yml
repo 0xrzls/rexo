@@ -215,8 +215,11 @@ jobs:
       - name: Verify artifacts present
         run: |
           ls -la ./artifacts/
-          COUNT=$(find ./artifacts -type f \( -name "*.polkavm" -o -name "*.blob" \) | wc -l)
-          test "${COUNT}" -gt 0 || { echo "::error::Tidak ada blob untuk di-deploy"; exit 1; }
+          COUNT=$(find ./artifacts -type f \( -name "*.polkavm" -o -name "*.blob" -o -name "*.wasm" \) | wc -l)
+          test "${COUNT}" -gt 0 || { echo "::error::Tidak ada artefak program (.wasm/.blob/.polkavm) untuk di-deploy"; exit 1; }
+          mkdir -p "${CONTRACT_DIR}/build-output"
+          cp -r ./artifacts/* "${CONTRACT_DIR}/" 2>/dev/null || true
+          cp -r ./artifacts/* "${CONTRACT_DIR}/build-output/" 2>/dev/null || true
 
       - name: Restore Rialo toolchain
         uses: actions/cache@v4
@@ -260,7 +263,9 @@ jobs:
       - name: Deploy program
         run: |
           cd "${CONTRACT_DIR}"
-          rialo client program deploy-venus . | tee /tmp/deploy.log
+          WASM_FILE=$(find ./build-output . -maxdepth 2 -type f \( -name "*.wasm" -o -name "*.blob" -o -name "*.polkavm" \) 2>/dev/null | head -1)
+          echo "Target binary deploy: ${WASM_FILE}"
+          rialo client program deploy-venus . | tee /tmp/deploy.log ||           ( [ -n "${WASM_FILE}" ] && rialo client program deploy "${WASM_FILE}" | tee /tmp/deploy.log ) ||           rialo client program deploy . | tee /tmp/deploy.log
           grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}' /tmp/deploy.log | head -1 > /tmp/program_id || true
           echo "PROGRAM_ID=$(cat /tmp/program_id)" >> "$GITHUB_ENV"
 
