@@ -76,30 +76,10 @@ jobs:
           restore-keys: ${{ runner.os }}-rialo-rust-
 
       - name: Install rialoman
-        run: |
-          curl -sSf https://install.rialo.io/rialoman.sh | sh
-          echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
+        run: cargo install rialoman --version 0.3.0
 
       - name: Install rialo-rust toolchain
         run: |
-          # Cari lokasi binary rialoman yang sebenarnya
-          RIALOMAN_BIN=$(find "$HOME" -name rialoman -type f -executable 2>/dev/null | head -n 1)
-          
-          if [ -z "$RIALOMAN_BIN" ]; then
-            echo "::error::rialoman tidak ditemukan di \$HOME setelah instalasi"
-            exit 1
-          fi
-          
-          echo "Ditemukan rialoman di: $RIALOMAN_BIN"
-          DIR_RIALOMAN="$(dirname "$RIALOMAN_BIN")"
-          
-          # Daftarkan ke GITHUB_PATH agar step selanjutnya bisa pakai
-          echo "$DIR_RIALOMAN" >> "$GITHUB_PATH"
-          
-          # Export ke sesi ini agar perintah di bawah langsung bisa jalan
-          export PATH="$DIR_RIALOMAN:$PATH"
-
           if ! rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
              rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
           fi
@@ -174,10 +154,7 @@ jobs:
           key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
 
       - name: Install Rialo CLI
-        run: |
-          curl -sSf https://install.rialo.io/rialoman.sh | sh
-          echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
+        run: cargo install rialoman --version 0.3.0
 
       - name: Configure signing keypair
         env:
