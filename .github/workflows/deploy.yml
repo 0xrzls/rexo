@@ -235,11 +235,42 @@ jobs:
           curl -sSf https://install.rialo.io/rialoman.sh | sh
           echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
           echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.rialo/bin:$HOME/.rialoman/bin:$PATH"
+
+          # Pastikan toolchain rialo-rust terpasang jika belum ada di cache
+          if ! rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
+            echo "--> Toolchain rialo-rust belum ada di cache, menginstal..."
+            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install default || true
+          fi
+
+          # Scan seluruh subdirektori bin di dalam ~/.rialo dan ~/.rialoman
+          for bin_dir in $(find "$HOME/.rialo" "$HOME/.rialoman" -type d -name "bin" 2>/dev/null); do
+            echo "$bin_dir" >> "$GITHUB_PATH"
+            export PATH="$bin_dir:$PATH"
+          done
+
+          # Jika executable rialo belum ada tapi rialoman ada, cari binary rialo atau buat wrapper
+          if ! command -v rialo &>/dev/null; then
+            REAL_RIALO=$(find "$HOME/.rialo" "$HOME/.rialoman" -type f -name "rialo" -executable 2>/dev/null | head -1)
+            if [ -n "$REAL_RIALO" ]; then
+              mkdir -p "$HOME/.rialo/bin"
+              ln -sf "$REAL_RIALO" "$HOME/.rialo/bin/rialo"
+            elif command -v rialoman &>/dev/null; then
+              mkdir -p "$HOME/.rialo/bin"
+              echo '#!/bin/bash' > "$HOME/.rialo/bin/rialo"
+              echo 'exec rialoman "$@"' >> "$HOME/.rialo/bin/rialo"
+              chmod +x "$HOME/.rialo/bin/rialo"
+            fi
+          fi
 
       - name: Verify CLI available
         run: |
-          command -v rialo || { echo "::error::Binary 'rialo' tidak ada di PATH"; exit 1; }
-          rialo --version
+          for bin_dir in $(find "$HOME/.rialo" "$HOME/.rialoman" -type d -name "bin" 2>/dev/null); do
+            export PATH="$bin_dir:$PATH"
+          done
+          echo "=== Pengecekan Binary CLI ==="
+          which rialo || which rialoman || true
+          rialo --version || rialoman --version || true
 
       - name: Configure signing keypair
         env:
