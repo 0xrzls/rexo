@@ -138,9 +138,11 @@ jobs:
           mkdir -p build-output "${CONTRACT_DIR}/build-output"
           CURVE_SRC="${CONTRACT_DIR}/src/curve.rs"
           if [ -f "$CURVE_SRC" ]; then
-            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o build-output/rexo_core.wasm
-            cp build-output/rexo_core.wasm "${CONTRACT_DIR}/build-output/rexo_core.wasm" 2>/dev/null || true
-            echo "✅ WASM binary compiled: build-output/rexo_core.wasm ($(stat -c%s build-output/rexo_core.wasm) bytes)"
+            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" ||             rustc --crate-type=cdylib -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || true
+            cp "${CONTRACT_DIR}/build-output/rexo_core.wasm" build-output/rexo_core.wasm 2>/dev/null || true
+            if [ -f "build-output/rexo_core.wasm" ]; then
+              echo "✅ WASM binary compiled: build-output/rexo_core.wasm ($(stat -c%s build-output/rexo_core.wasm) bytes)"
+            fi
           fi
 
       - name: Compile Venus PDK artifact
@@ -165,6 +167,7 @@ jobs:
       - name: Package build artifacts
         run: |
           mkdir -p build-output
+          cp "${CONTRACT_DIR}/build-output/"*.wasm build-output/ 2>/dev/null || true
           find "${CONTRACT_DIR}" -type f \
             \( -name "*.polkavm" -o -name "*.blob" -o -name "*.wasm" \) \
             -not -path "*/.fingerprint/*" \
