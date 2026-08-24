@@ -1,5 +1,14 @@
 # =============================================================================
 # Rialo Contract Build & Deploy Pipeline
+#
+# Perubahan dari run terakhir:
+#   1. Guard `if ! ... grep -q rialo-rust` DIHAPUS — guard itulah yang
+#      diam-diam melewati instalasi toolchain (76ms, nol output).
+#   2. Versi rialoman disamakan dengan rialo-build-lib (0.10.x), bukan 0.3.0.
+#   3. RIALO_RUST_TOOLCHAIN_VERSION diset — env var ini terverifikasi dari
+#      output build script: `cargo:rerun-if-env-changed=RIALO_RUST_TOOLCHAIN_VERSION`
+#   4. ~/.cargo/bin di-cache supaya rialoman tidak dikompilasi ulang 2m26s.
+#   5. Semua output rialoman dicetak apa adanya.
 # =============================================================================
 
 name: Rialo Contract Build & Deploy Pipeline
@@ -10,26 +19,20 @@ on:
     paths:
       - 'contracts/**'
       - '.github/workflows/deploy.yml'
+      - '.github/scripts/**'
   workflow_dispatch:
     inputs:
       network:
         description: 'Target Rialo Network'
-        required: false
+        required: true
         default: 'devnet'
         type: choice
-        options:
-          - devnet
-          - testnet
+        options: [ devnet, testnet ]
       deploy_contract:
-        description: 'Deploy contract after successful compilation (requires RIALO_DEPLOY_KEY secret or deploy_key input)'
-        required: false
-        default: true
+        description: 'Deploy contract after successful compilation'
+        required: true
+        default: false
         type: boolean
-      deploy_key:
-        description: 'Optional deployer keypair JSON string (overrides secret if provided)'
-        required: false
-        default: ''
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,93 +40,134 @@ concurrency:
 
 env:
   CONTRACT_DIR: contracts/rexo-core
-  RIALO_TOOLCHAIN_VERSION: "0.10.1"
+
+  # ---------------------------------------------------------------------
+  # PENTING — kedua versi ini harus serumpun.
+  #
+  # Run terakhir memasang rialoman 0.3.0, sementara artifact memakai
+  # rialo-build-lib 0.10.2. Yang MENCARI toolchain adalah build-lib 0.10.2
+  # (lihat stack trace), yang MEMASANG adalah rialoman 0.3.0. Dua generasi
+  # berbeda; kalau layout direktorinya berubah di antara keduanya,
+  # instalasi sukses pun tidak akan ditemukan.
+  #
+  # Cargo memberitahu bahwa 0.18.1 adalah versi terbaru. Pertimbangkan
+  # menaikkan artifact/Cargo.toml dan rexo-core/Cargo.toml ke 0.18.1
+  # sekalian, lalu set kedua angka di bawah ke 0.18.1.
+  # ---------------------------------------------------------------------
+  RIALOMAN_VERSION: "0.10.2"
+  RIALO_TOOLCHAIN_VERSION: "0.10.2"
 
 jobs:
-  # ===========================================================================
-  # JOB 1 — Test matematika kurva
-  # ===========================================================================
   curve-tests:
     name: Curve Math Invariants (21 tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - name: Run curve invariant tests
         run: |
           CURVE_SRC="${CONTRACT_DIR}/src/curve.rs"
-          test -f "$CURVE_SRC" || { echo "::error::curve.rs tidak ditemukan di $CURVE_SRC"; exit 1; }
+          test -f "$CURVE_SRC" || { echo "::error::curve.rs tidak ditemukan"; exit 1; }
           rustc --test "$CURVE_SRC" -o /tmp/curve_test
           /tmp/curve_test --nocapture
 
-  # ===========================================================================
-  # JOB 2 — Build kontrak Venus PDK
-  # ===========================================================================
   build-contract:
-    name: Compile Rialo Smart Contract (Venus PDK)
+    name: Compile Rialo Contract (Venus PDK)
     runs-on: ubuntu-latest
     needs: curve-tests
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install system build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libssl-dev curl git \
-            clang llvm binaryen ca-certificates cmake
+            clang llvm binaryen ca-certificates cmake python3
 
-      - name: Setup Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
 
-      - name: Cache Rialo toolchain
+      # -------------------------------------------------------------------
+      # Cache binary rialoman. Run terakhir mengompilasi 316 crate selama
+      # 2 menit 26 detik hanya untuk mendapatkan ~/.cargo/bin/rialoman,
+      # dan direktori itu tidak ada di path cache mana pun.
+      # -------------------------------------------------------------------
+      - name: Cache rialoman binary
+        id: rialoman-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/rialoman
+          key: ${{ runner.os }}-rialoman-${{ env.RIALOMAN_VERSION }}
+
+      - name: Install rialoman
+        if: steps.rialoman-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install rialoman --version "${RIALOMAN_VERSION}" --locked
+          rialoman --version
+
+      # -------------------------------------------------------------------
+      # Cache toolchain rialo-rust. Path masih TEBAKAN — step "Locate"
+      # di bawah akan mencetak lokasi sebenarnya. Sesuaikan setelah run ini.
+      # rialo-build-lib memakai crate `dirs`, jadi bisa jadi di
+      # ~/.local/share/... bukan ~/.rialo.
+      # -------------------------------------------------------------------
+      - name: Cache rialo-rust toolchain
         uses: actions/cache@v4
         with:
           path: |
             ~/.rialo
             ~/.rialoman
+            ~/.local/share/rialo
+            ~/.local/share/rialoman
           key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
           restore-keys: ${{ runner.os }}-rialo-rust-
 
-      - name: Install rialoman
-        run: |
-          curl -sSf https://install.rialo.io/rialoman.sh | sh
-          echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
-
-      - name: Discover available toolchains
+      # -------------------------------------------------------------------
+      # Cetak semuanya. Run terakhir gagal karena kita mem-grep output yang
+      # tidak pernah kita lihat.
+      # -------------------------------------------------------------------
+      - name: Inspect rialoman CLI
         continue-on-error: true
         run: |
-          rialoman --version || true
-          echo "=== terpasang ==="
-          rialoman toolchain list || true
-          echo "=== tersedia ==="
-          rialoman toolchain list --available || rialoman toolchain install --help || true
+          echo "=== rialoman --version ==="; rialoman --version || true
+          echo; echo "=== rialoman --help ==="; rialoman --help || true
+          echo; echo "=== rialoman toolchain --help ==="; rialoman toolchain --help || true
+          echo; echo "=== rialoman toolchain install --help ==="; rialoman toolchain install --help || true
+          echo; echo "=== rialoman toolchain list (SEBELUM install) ==="; rialoman toolchain list || true
 
+      # -------------------------------------------------------------------
+      # INI PERBAIKAN UTAMANYA.
+      #
+      # Versi lama:
+      #   if ! rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
+      #        rialoman toolchain install ...
+      #   fi
+      #
+      # `toolchain list` mencetak string "rialo-rust" walaupun nol toolchain
+      # terpasang, jadi grep cocok, kondisi jadi false, dan install DILEWATI.
+      # Step-nya selesai dalam 76ms tanpa output dan lapor hijau.
+      #
+      # Tidak ada guard lagi. Jalankan selalu.
+      # -------------------------------------------------------------------
       - name: Install rialo-rust toolchain
         run: |
-          if rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
-            echo "rialo-rust sudah tersedia (dari cache)"
-          else
-            echo "--> Mencoba menginstal toolchain rialo-rust (default / latest / version)..."
-            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install rialo-rust latest ||             rialoman toolchain install default ||             echo "::warning::Gagal memasang toolchain via rialoman. Mengecek status toolchain lokal..."
-          fi
-          echo "=== Toolchain Terpasang Saat Ini ==="
-          rialoman toolchain list || true
+          rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"
+          echo "=== rialoman toolchain list (SESUDAH install) ==="
+          rialoman toolchain list
 
-      - name: Locate toolchain path
+      - name: Locate toolchain install dir
         continue-on-error: true
         run: |
-          ls -la "$HOME" | grep -i rialo || true
-          du -sh "$HOME"/.rialo* 2>/dev/null || true
-          echo "=== Mencari binary toolchain ==="
-          find "$HOME/.rialo" "$HOME/.rialoman" -type f -executable 2>/dev/null || true
+          for d in "$HOME/.rialo" "$HOME/.rialoman" \
+                   "$HOME/.local/share/rialo" "$HOME/.local/share/rialoman" \
+                   "$HOME/.cache/rialo" "$HOME/.config/rialo"; do
+            [ -e "$d" ] && { echo "DITEMUKAN: $d"; du -sh "$d"; }
+          done
+          echo "--- pencarian luas ---"
+          find "$HOME" -maxdepth 4 -iname "*rialo*" -not -path "*/.cargo/registry/*" 2>/dev/null | head -30
 
       - name: Cargo cache
         uses: actions/cache@v4
@@ -137,64 +181,40 @@ jobs:
           key: ${{ runner.os }}-cargo-rialo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-rialo-
 
-      - name: Compile Standalone Rialo WASM Binary
-        run: |
-          echo "==> Compiling core contract logic to WASM binary target..."
-          mkdir -p build-output "${CONTRACT_DIR}/build-output"
-          CURVE_SRC="${CONTRACT_DIR}/src/curve.rs"
-          if [ -f "$CURVE_SRC" ]; then
-            rustc --crate-type=cdylib --target=wasm32-unknown-unknown -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" ||             rustc --crate-type=cdylib -O "$CURVE_SRC" -o "${CONTRACT_DIR}/build-output/rexo_core.wasm" || true
-            cp "${CONTRACT_DIR}/build-output/rexo_core.wasm" build-output/rexo_core.wasm 2>/dev/null || true
-            if [ -f "build-output/rexo_core.wasm" ]; then
-              echo "✅ WASM binary compiled: build-output/rexo_core.wasm ($(stat -c%s build-output/rexo_core.wasm) bytes)"
-            fi
-          fi
-
       - name: Compile Venus PDK artifact
         env:
           RUST_BACKTRACE: "full"
+          # Terverifikasi dari output build script run terakhir:
+          #   cargo:rerun-if-env-changed=RIALO_RUST_TOOLCHAIN_VERSION
+          # Ini memaksa resolusi versi alih-alih membiarkan build-lib menebak.
+          RIALO_RUST_TOOLCHAIN_VERSION: ${{ env.RIALO_TOOLCHAIN_VERSION }}
         run: |
           cd "${CONTRACT_DIR}"
-          # Pastikan binary rialo dan toolchain ada di PATH saat proses build
-          for p in $(find "$HOME/.rialo" "$HOME/.rialoman" -type d -name "bin" 2>/dev/null); do
-            export PATH="$p:$PATH"
-          done
-          
-          if [ -f "artifact/Cargo.toml" ]; then
-            echo "--> Menjalankan cargo build untuk artifact PDK..."
-            cargo build --manifest-path artifact/Cargo.toml --release --verbose || {
-              echo "::warning::Kompilasi PDK artifact via artifact/Cargo.toml menemukan isu sintaks/dependency. Melanjutkan dengan standalone WASM & WIT."
-            }
-          elif [ -f "Cargo.toml" ]; then
-            cargo build --release --verbose || true
-          fi
+          test -f artifact/Cargo.toml || { echo "::error::artifact/Cargo.toml tidak ditemukan"; exit 1; }
+          cargo build --manifest-path artifact/Cargo.toml --release --verbose
 
       - name: Package build artifacts
         run: |
           mkdir -p build-output
-          cp "${CONTRACT_DIR}/build-output/"*.wasm build-output/ 2>/dev/null || true
           find "${CONTRACT_DIR}" -type f \
             \( -name "*.polkavm" -o -name "*.blob" -o -name "*.wasm" \) \
             -not -path "*/.fingerprint/*" \
-            -exec cp -v {} build-output/ \; 2>/dev/null || true
+            -exec cp -v {} build-output/ \;
           [ -d "${CONTRACT_DIR}/wit" ] && cp -r "${CONTRACT_DIR}/wit" build-output/ || true
-          if [ -f "${CONTRACT_DIR}/Cargo.toml" ]; then
-            cp "${CONTRACT_DIR}/Cargo.toml" build-output/ 2>/dev/null || true
-          fi
-          echo "=== Isi Direktori build-output ==="
           ls -la build-output/
 
-      - name: Assert artifact was actually produced
-        run: |
-          COUNT=$(find build-output -type f \
-            \( -name "*.polkavm" -o -name "*.blob" -o -name "*.wasm" \) | wc -l)
-          echo "Artifact ditemukan: ${COUNT}"
-          if [ "${COUNT}" -eq 0 ]; then
-            echo "::error::Build gagal: tidak ada biner (.wasm / .blob / .polkavm) yang dihasilkan."
-            exit 1
-          fi
+      # -------------------------------------------------------------------
+      # Assertion lama HANYA MENGHITUNG FILE dan punya lubang: modul wasm
+      # kosong (nol fungsi, hanya ekspor `memory`) tetap lolos. Persis itu
+      # yang terjadi di run 9532535523 — 1,6 MB yang 100% isinya debug info.
+      #
+      # Validator ini membuka file-nya: mem-parse section wasm, menolak
+      # modul tanpa code section, dan mewajibkan adanya blob PolkaVM.
+      # -------------------------------------------------------------------
+      - name: Validate artifacts
+        run: python3 .github/scripts/validate-artifact.py build-output/
 
-      - name: Upload contract artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rialo-contract-artifacts
@@ -202,14 +222,12 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  # ===========================================================================
-  # JOB 3 — Deploy
-  # ===========================================================================
   deploy-contract:
-    name: Deploy Program to ${{ inputs.network || 'devnet' }}
+    name: Deploy to ${{ inputs.network }}
     needs: build-contract
-    if: ${{ always() && needs.build-contract.result == 'success' && (inputs.deploy_contract == true || inputs.deploy_contract == 'true' || github.event.inputs.deploy_contract == 'true' || github.event.inputs.deploy_contract == true) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_contract }}
     runs-on: ubuntu-latest
+    environment: ${{ inputs.network }}
 
     steps:
       - uses: actions/checkout@v4
@@ -222,171 +240,109 @@ jobs:
       - name: Verify artifacts present
         run: |
           ls -la ./artifacts/
-          COUNT=$(find ./artifacts -type f \( -name "*.polkavm" -o -name "*.blob" -o -name "*.wasm" \) | wc -l)
-          test "${COUNT}" -gt 0 || { echo "::error::Tidak ada artefak program (.wasm/.blob/.polkavm) untuk di-deploy"; exit 1; }
-          mkdir -p "${CONTRACT_DIR}/build-output"
-          cp -r ./artifacts/* "${CONTRACT_DIR}/" 2>/dev/null || true
-          cp -r ./artifacts/* "${CONTRACT_DIR}/build-output/" 2>/dev/null || true
+          COUNT=$(find ./artifacts -type f \( -name "*.polkavm" -o -name "*.blob" \) | wc -l)
+          [ "${COUNT}" -gt 0 ] || { echo "::error::Tidak ada blob untuk di-deploy"; exit 1; }
 
-      - name: Restore Rialo toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.rialo
-            ~/.rialoman
-          key: ${{ runner.os }}-rialo-rust-${{ env.RIALO_TOOLCHAIN_VERSION }}
-          restore-keys: ${{ runner.os }}-rialo-rust-
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Rialo CLI
         run: |
-          curl -sSf https://install.rialo.io/rialoman.sh | sh
-          echo "$HOME/.rialo/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.rialoman/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.rialo/bin:$HOME/.rialoman/bin:$PATH"
-
-          # Pastikan toolchain rialo-rust terpasang jika belum ada di cache
-          if ! rialoman toolchain list 2>/dev/null | grep -q "rialo-rust"; then
-            echo "--> Toolchain rialo-rust belum ada di cache, menginstal..."
-            rialoman toolchain install rialo-rust ||             rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}" ||             rialoman toolchain install default || true
-          fi
-
-          # Scan seluruh subdirektori bin di dalam ~/.rialo dan ~/.rialoman
-          for bin_dir in $(find "$HOME/.rialo" "$HOME/.rialoman" -type d -name "bin" 2>/dev/null); do
-            echo "$bin_dir" >> "$GITHUB_PATH"
-            export PATH="$bin_dir:$PATH"
-          done
-
-          # Jika executable rialo belum ada tapi rialoman ada, cari binary rialo atau buat wrapper
-          if ! command -v rialo &>/dev/null; then
-            REAL_RIALO=$(find "$HOME/.rialo" "$HOME/.rialoman" -type f -name "rialo" -executable 2>/dev/null | head -1)
-            if [ -n "$REAL_RIALO" ]; then
-              mkdir -p "$HOME/.rialo/bin"
-              ln -sf "$REAL_RIALO" "$HOME/.rialo/bin/rialo"
-            elif command -v rialoman &>/dev/null; then
-              mkdir -p "$HOME/.rialo/bin"
-              echo '#!/bin/bash' > "$HOME/.rialo/bin/rialo"
-              echo 'exec rialoman "$@"' >> "$HOME/.rialo/bin/rialo"
-              chmod +x "$HOME/.rialo/bin/rialo"
-            fi
-          fi
-
-      - name: Verify CLI available
-        run: |
-          for bin_dir in $(find "$HOME/.rialo" "$HOME/.rialoman" -type d -name "bin" 2>/dev/null); do
-            export PATH="$bin_dir:$PATH"
-          done
-          echo "=== Pengecekan Binary CLI ==="
-          which rialo || which rialoman || true
-          rialo --version || rialoman --version || true
+          # `rialo` (CLI klien) kemungkinan crate terpisah dari `rialoman`.
+          # Konfirmasi namanya: cargo search rialo
+          cargo install rialoman --version "${RIALOMAN_VERSION}" --locked
+          command -v rialo || { echo "::error::Binary 'rialo' tidak ada. Cek nama crate CLI klien."; exit 1; }
+          rialo --version
 
       # -------------------------------------------------------------------
-      # Membaca secret RIALO_DEPLOY_KEY, inputs.deploy_key, vars.RIALO_DEPLOY_KEY,
-      # atau generate keypair deployer baru on-the-fly jika belum disetel
+      # TIDAK ADA generator keypair otomatis.
+      #
+      # Versi sebelumnya membuat `crypto.randomBytes(64)` saat secret hilang.
+      # Format keypair Solana/Rialo adalah [32 byte seed][32 byte pubkey yang
+      # DITURUNKAN dari seed]. Dua bagian acak tidak berhubungan, jadi setiap
+      # tanda tangan akan ditolak. Sudah kuverifikasi dengan menurunkan
+      # pubkey asli dari seed-nya: tidak cocok, peluang 1 dari 2^256.
+      #
+      # Tidak ada secret = job merah. Itu satu-satunya perilaku yang benar.
+      #
+      # Juga TIDAK ADA input `deploy_key`. Input workflow_dispatch tidak
+      # disamarkan GitHub dan tersimpan permanen di metadata run.
       # -------------------------------------------------------------------
       - name: Configure signing keypair
         env:
-          RIALO_DEPLOY_KEY_SECRET: ${{ secrets.RIALO_DEPLOY_KEY }}
-          RIALO_DEPLOY_KEY_VAR: ${{ vars.RIALO_DEPLOY_KEY }}
-          RIALO_DEPLOY_KEY_INPUT: ${{ inputs.deploy_key || github.event.inputs.deploy_key }}
+          RIALO_DEPLOY_KEY: ${{ secrets.RIALO_DEPLOY_KEY }}
         run: |
-          DEPLOY_KEY="${RIALO_DEPLOY_KEY_SECRET:-${RIALO_DEPLOY_KEY_INPUT:-$RIALO_DEPLOY_KEY_VAR}}"
-          mkdir -p ~/.config/rialo
-          umask 077
-          if [ -n "${DEPLOY_KEY}" ]; then
-            echo "--> Menggunakan Deployer Keypair dari Secret / Input Dispatch..."
-            printf '%s' "${DEPLOY_KEY}" > ~/.config/rialo/id.json
-          else
-            echo "::warning::Secret RIALO_DEPLOY_KEY belum disetel di Secrets repo. Membuat deployer keypair baru on-the-fly..."
-            node -e '
-              const crypto = require("crypto");
-              const bytes = Array.from(crypto.randomBytes(64));
-              require("fs").writeFileSync(process.env.HOME + "/.config/rialo/id.json", JSON.stringify(bytes));
-            '
-          fi
-          chmod 600 ~/.config/rialo/id.json
-          echo "✅ Keypair deployer siap di ~/.config/rialo/id.json ($(wc -c < ~/.config/rialo/id.json) bytes)"
-          
-          # Tampilkan public address dari keypair deployer aktif
-          DEPLOYER_PUBKEY=""
-          if command -v rialo &>/dev/null; then
-            DEPLOYER_PUBKEY=$(rialo address 2>/dev/null || rialo client address 2>/dev/null || true)
-          fi
-          echo "Deployer Public Key: ${DEPLOYER_PUBKEY:-[Active Key]}"
-          echo "DEPLOYER_PUBKEY=${DEPLOYER_PUBKEY}" >> "$GITHUB_ENV"
-
-      - name: Switch network
-        run: |
-          RPC_URL="${{ inputs.network == 'testnet' && 'https://testnet.rialo.io:4101' || 'https://devnet.rialo.io:4101' }}"
-          echo "Target Network: ${{ inputs.network }} (${RPC_URL})"
-          rialo config set --url "${RPC_URL}" || \
-          rialo config network switch "${{ inputs.network }}" || \
-          rialo config set --network "${{ inputs.network }}" || \
-          rialo config set -u "${{ inputs.network }}" || true
-          echo "=== Active Configuration ==="
-          rialo config get || true
-
-      - name: Fund deployer
-        run: |
-          echo "Requesting devnet airdrop for deployer..."
-          rialo client airdrop --amount 1 || \
-          rialo airdrop 1 || true
-          echo "=== Deployer Balance Check ==="
-          rialo balance || true
-
-      - name: Deploy program
-        run: |
-          for p in $(find "$HOME/.rialo" "$HOME/.rialoman" -type d -name "bin" 2>/dev/null); do
-            export PATH="$p:$PATH"
-          done
-
-          cd "${CONTRACT_DIR}"
-          WASM_FILE=$(find ./build-output . -maxdepth 2 -type f \( -name "*.wasm" -o -name "*.blob" -o -name "*.polkavm" \) 2>/dev/null | head -1)
-          echo "Target binary deploy: ${WASM_FILE:-[venus project]}"
-          
-          DEPLOYED=false
-          : > /tmp/deploy.log
-
-          echo "--> Executing Rialo deploy commands..."
-          if rialo client program deploy-venus . 2>&1 | tee /tmp/deploy.log; then
-            DEPLOYED=true
-          elif [ -n "${WASM_FILE}" ] && rialo client program deploy "${WASM_FILE}" 2>&1 | tee /tmp/deploy.log; then
-            DEPLOYED=true
-          elif [ -n "${WASM_FILE}" ] && rialo program deploy "${WASM_FILE}" 2>&1 | tee /tmp/deploy.log; then
-            DEPLOYED=true
-          elif rialo client program deploy . 2>&1 | tee /tmp/deploy.log; then
-            DEPLOYED=true
-          elif rialo program deploy . 2>&1 | tee /tmp/deploy.log; then
-            DEPLOYED=true
-          elif rialoman program deploy "${WASM_FILE:-.}" 2>&1 | tee /tmp/deploy.log; then
-            DEPLOYED=true
-          fi
-
-          echo "=== DEPLOY RAW OUTPUT ==="
-          cat /tmp/deploy.log
-
-          grep -iE "program id|contract id|address|transaction|signature|tx" /tmp/deploy.log || true
-
-          grep -i "program id" /tmp/deploy.log | grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}|0x[a-fA-F0-9]{40,64}' | head -1 > /tmp/program_id || true
-          if [ ! -s /tmp/program_id ]; then
-            grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}' /tmp/deploy.log | tail -1 > /tmp/program_id || true
-          fi
-
-          EXTRACTED_PID=$(cat /tmp/program_id 2>/dev/null || echo "")
-          echo "Extracted Program ID: ${EXTRACTED_PID}"
-          echo "PROGRAM_ID=${EXTRACTED_PID}" >> "$GITHUB_ENV"
-
-          if [ "${DEPLOYED}" != "true" ] && [ -z "${EXTRACTED_PID}" ]; then
-            echo "::error::Deploy command returned error. Please check the log output above."
+          set -euo pipefail
+          if [ -z "${RIALO_DEPLOY_KEY}" ]; then
+            echo "::error::Secret RIALO_DEPLOY_KEY belum diset. Settings > Secrets and variables > Actions."
             exit 1
           fi
+          umask 077
+          mkdir -p ~/.config/rialo
+          printf '%s' "${RIALO_DEPLOY_KEY}" > ~/.config/rialo/id.json
+          chmod 600 ~/.config/rialo/id.json
+          # Validasi bentuk: harus array 64 angka.
+          python3 - <<'EOF'
+          import json, os, sys
+          p = os.path.expanduser("~/.config/rialo/id.json")
+          try:
+              k = json.load(open(p))
+          except Exception as e:
+              print(f"::error::id.json bukan JSON valid: {e}"); sys.exit(1)
+          if not isinstance(k, list) or len(k) != 64:
+              print(f"::error::Keypair harus array 64 byte, dapat {type(k).__name__} panjang {len(k) if isinstance(k, list) else '?'}")
+              sys.exit(1)
+          if any((not isinstance(b, int)) or b < 0 or b > 255 for b in k):
+              print("::error::Keypair berisi nilai di luar rentang byte"); sys.exit(1)
+          print("Bentuk keypair valid (64 byte).")
+          EOF
 
-      - name: Verify deployment
+      - name: Switch network
+        run: rialo config network switch ${{ inputs.network }}
+
+      - name: Fund deployer
+        run: rialo client airdrop --amount 1 || echo "::warning::Airdrop gagal — cek saldo / rate limit"
+
+      # -------------------------------------------------------------------
+      # `set -o pipefail` WAJIB.
+      #
+      # Tanpa itu, `if rialo ... | tee log; then` SELALU true, karena exit
+      # status pipeline = exit status `tee`. Sudah kuuji: perintah yang
+      # return 1 tetap menghasilkan DEPLOYED=true.
+      #
+      # Juga tidak ada kaskade enam perintah tebakan. Satu perintah, bentuk
+      # yang terverifikasi dari AGENTS.md repo resmi. Kalau salah, errornya
+      # akan memberitahu bentuk yang benar — itu lebih berguna daripada
+      # menebak sampai ada yang kebetulan exit 0.
+      # -------------------------------------------------------------------
+      - name: Deploy program
         run: |
-          test -s /tmp/program_id || [ -n "${PROGRAM_ID}" ] \
-            || { echo "::error::Tidak ada program ID di output deploy"; exit 1; }
-          echo "### 🚀 Deployed Successfully to ${{ inputs.network || 'devnet' }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Program ID:** `${PROGRAM_ID}`" >> "$GITHUB_STEP_SUMMARY"
-          echo "✅ Program ID berhasil diverifikasi on-chain: ${PROGRAM_ID}"
+          set -euo pipefail
+          cd "${CONTRACT_DIR}"
+          rialo client program deploy-venus . 2>&1 | tee /tmp/deploy.log
+          echo "PROGRAM_ID_RAW=$(grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}' /tmp/deploy.log | head -1)" >> "$GITHUB_ENV"
+
+      # -------------------------------------------------------------------
+      # Ini BUKAN verifikasi on-chain. Ini hanya mengecek bahwa output
+      # deploy mengandung sesuatu berbentuk program ID.
+      #
+      # Versi sebelumnya mencetak "berhasil diverifikasi on-chain" tanpa
+      # pernah mengirim satu query pun ke chain. Jangan klaim hal yang
+      # tidak kamu lakukan.
+      #
+      # Untuk verifikasi sungguhan, query chain dengan program ID-nya
+      # setelah kamu tahu perintah yang benar (rialo client --help).
+      # -------------------------------------------------------------------
+      - name: Report deploy output
+        run: |
+          set -euo pipefail
+          if [ -z "${PROGRAM_ID_RAW:-}" ]; then
+            echo "::error::Tidak ada string berbentuk program ID di output deploy"
+            exit 1
+          fi
+          echo "### Deploy dikirim ke ${{ inputs.network }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Kandidat Program ID: \`${PROGRAM_ID_RAW}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "_Belum diverifikasi on-chain._" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wipe keypair
         if: always()
