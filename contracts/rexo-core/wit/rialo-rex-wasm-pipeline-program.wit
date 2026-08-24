@@ -1,0 +1,7 @@
+package rialo:rialo-rex-wasm-pipeline-program@0.1.0;
+
+use rialo:primitives@0.1.0.{pubkey, lamports, timestamp, error};
+
+world rialo-rex-wasm-pipeline-program {
+    export start: func(api-url: string, receiver: pubkey, reward-amount: u64, rex-bytecode-account: pubkey) -> result<_, error>;
+}
