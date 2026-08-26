@@ -18,6 +18,7 @@ fn main() {
             println!("cargo:warning=PolkaVM artifact build finished successfully");
         }
         Err(e) => {
+            println!("cargo:warning=POLKAVM BUILD ERROR DETAILS: {:#?}", e);
             eprintln!("==================================================");
             eprintln!("POLKAVM BUILD ERROR DETAILS:\n{:#?}", e);
             eprintln!("==================================================");
