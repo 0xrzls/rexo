@@ -81,7 +81,6 @@ rialo! {
             self.telegram_members = 0;
             self.x_account_age_days = 0;
 
-            AFTER 90 seconds CALL [settle_sealed_batch];
             Ok(())
         }
 
@@ -112,9 +111,10 @@ rialo! {
             Ok(())
         }
 
-        fn finalize(&mut self) -> ProgramResult {
+        terminating fn finalize(&mut self) -> ProgramResult {
             self.complete = true;
             Ok(())
         }
     }
 }
+
