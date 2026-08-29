@@ -164,6 +164,9 @@ jobs:
       # 4. Kompilasi Kontrak menggunakan rialo-build kanonik
       # -------------------------------------------------------------------
       - name: Compile Contract via rialo-build
+        env:
+          RUST_BACKTRACE: "1"
+          RUST_LOG: "debug"
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/share/rialo/bin:$HOME/.cargo/bin:$PATH"
@@ -295,6 +298,7 @@ jobs:
           echo "Deploying binary artifact: ${POLKAVM_PATH}"
           rialo client program deploy -n ${{ inputs.network }} "${POLKAVM_PATH}" 2>&1 | tee /tmp/deploy.log
           
+          # Ekstrak Program ID
           PROGRAM_ID=$(grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}' /tmp/deploy.log | head -1 || true)
           if [ -z "${PROGRAM_ID}" ]; then
             echo "::error::Tidak berhasil mengekstrak Program ID dari output deploy."
@@ -329,6 +333,7 @@ jobs:
             exit 1
           fi
           
+          # Hitung SHA-256 payload on-chain (skip 48-byte header Loader V4)
           ONCHAIN_PAYLOAD_SHA=$(echo "${ACCOUNT_JSON}" | jq -r .data | base64 -d | tail -c +49 | sha256sum | awk '{print $1}')
           LOCAL_ARTIFACT_SHA=$(sha256sum "${POLKAVM_PATH}" | awk '{print $1}')
           
@@ -343,10 +348,10 @@ jobs:
           echo "VERIFIKASI SUKSES: Payload on-chain 100% identik dengan artifact lokal."
           
           echo "### Ringkasan Deployment ke ${{ inputs.network }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Program ID**: \`${PROGRAM_ID}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Loader**: \`${OWNER}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Executable**: \`${EXECUTABLE}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SHA-256 (Payload offset +48B)**: \`${ONCHAIN_PAYLOAD_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Program ID**: `${PROGRAM_ID}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Loader**: `${OWNER}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Executable**: `${EXECUTABLE}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SHA-256 (Payload offset +48B)**: `${ONCHAIN_PAYLOAD_SHA}`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wipe Keypair
         if: always()
