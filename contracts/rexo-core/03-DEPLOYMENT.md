@@ -1,250 +1,475 @@
-# Rialo Deployment & Requirement Guide
+# TriggerDesk — Compile & Deploy Program di Rialo DevNet
 
-Disusun dari analisis komparatif dua implementasi referensi: `triggerdesk-main` (alur verifikasi nyata) dan `Permitly-main` (analisis pseudo-DSL & mock).
+Panduan berurutan dari nol sampai program terverifikasi on-chain.
+Semua isi diambil dari repo `triggerdesk` — tidak ada langkah karangan.
 
----
-
-## 0. Ringkasan Temuan
-
-| Aspek | TriggerDesk (Kanonik) | Permitly |
-|---|---|---|
-| **Bahasa Kontrak** | Rust + Venus DSL (`rialo!` procedural macro) | File teks `.rialo` (pseudo-DSL) |
-| **Compile Target** | PolkaVM RISC-V (`riscv64emac-solana-solana`) | Tidak ada proses compile |
-| **Artifact di Repo** | File `.polkavm` (hash cocok registry) | Tidak ada artifact binary |
-| **Cara Deploy** | `rialo client program deploy <binary>` | JSON-RPC `deployProgram` kirim source mentah |
-| **Bukti On-Chain** | Tx signature, balance delta, hash payload 48-byte offset | Tidak ada |
-| **Status** | **Jalur deploy nyata dan terverifikasi** | **Belum bisa di-deploy sungguhan** |
-
-Semua langkah teknis di bawah ini mengadopsi standar kanonik TriggerDesk yang telah teruji secara on-chain di Rialo DevNet.
+Tiga titik yang tidak terdokumentasi di repo ditandai dengan **⚠ CELAH** dan
+disertai cara mengisinya sendiri.
 
 ---
 
-## 1. Requirement & Spesifikasi Sistem
+## Langkah 0 — Siapkan host
 
-### 1.1 Host Environment
-
-| Item | Nilai Minimum / Rekomendasi |
+| Item | Nilai |
 |---|---|
-| **OS** | Ubuntu 22.04 LTS (target terverifikasi), x86_64 atau aarch64 |
-| **CPU / RAM / Disk** | 4 vCPU, 8 GB RAM, 80 GB SSD |
-| **Akses** | Shell + sudo, outbound HTTPS (port 443) dan DNS |
+| OS | Ubuntu 22.04 (target terverifikasi) |
+| Arsitektur | x86_64 atau aarch64 |
+| Spesifikasi | 4 vCPU, 8 GB RAM, 80 GB disk |
+| Akses | shell + sudo, outbound HTTPS dan DNS |
 
-*Catatan:* Ubuntu 24.04 didukung pada GitHub Actions / Codespace, namun script bootstrap akan mengeluarkan warning kompatibilitas. Pada Windows, gunakan WSL2 dengan Ubuntu 22.04.
+Windows: pakai WSL Ubuntu 22.04. macOS native tidak didukung.
+Ubuntu 24.04 pernah berhasil (GitHub Codespace `standardLinux32gb`), tapi
+bootstrap akan mengeluarkan warning karena bukan target terverifikasi.
 
-### 1.2 Versi Pinned (Wajib Terkunci)
+Host ini murni infrastruktur build/test. Ia tidak pernah jadi bagian dari
+eksekusi pembayaran — tidak ada scheduler, keeper, atau key service di runtime.
 
-Komponen dan CDK terikat erat pada versi yang sama. Jangan mengganti versi secara acak:
+---
 
-| Komponen | Versi Teruji |
-|---|---|
-| **Rialo Release** | `stable@0.12.2` |
-| **`rialoman`** | `0.3.0` (installer S3 melaporkan `0.3.0-alpha.0`) |
-| **Rialo Rust Toolchain** | `0.0.3` (tercatat di `.rialo-toolchain`) |
-| **Custom Target** | `riscv64emac-solana-solana` |
-| **Source-Build Nightly** | `nightly-2025-05-10` |
-| **Pinned Rust Commit** | `dcecb99176edf2eec51613730937d21cdd5c8f6e` |
-| **Venus Crates (`rialo-s-*`, `rialo-venus`)** | `0.12.2` |
-| **`@rialo/ts-cdk`** | `0.12.2` |
-| **Node.js** | 20 / 22 / 24 LTS |
-
-### 1.3 Paket Dependensi Sistem (apt)
+## Langkah 1 — Clone dan jalankan bootstrap
 
 ```bash
-sudo apt-get update && sudo apt-get install -y \
-  build-essential ca-certificates clang cmake curl git libssl-dev \
-  llvm ninja-build pkg-config protobuf-compiler python3 xz-utils
+git clone https://github.com/Ifem1/triggerdesk.git
+cd triggerdesk
+chmod +x scripts/bootstrap-rialo-dev.sh scripts/verify-rialo-v1.sh
+./scripts/bootstrap-rialo-dev.sh
 ```
 
-### 1.4 Jaringan & Endpoint RPC
+Script ini yang paling bisa dipercaya di seluruh repo — ia kode eksekusi,
+bukan dokumen yang bisa basi. Urutan kerjanya:
 
-| Keperluan | URL | Keterangan |
+1. Validasi Linux + Ubuntu, rekam OS/arch/DNS/HTTP sebagai evidence
+2. `apt-get install` prerequisite build
+3. Install Rust via rustup (`--profile minimal`, default stable)
+4. Install `rialoman` 0.3.0
+5. Install Rialo `stable@0.12.2`
+6. Install Rialo Rust toolchain `0.0.3`
+7. Validasi custom target tersedia
+
+Log lengkap: `.rialo-bootstrap/bootstrap.log`
+
+### Paket apt yang dipasang
+
+```
+build-essential ca-certificates clang cmake curl git libssl-dev
+llvm ninja-build pkg-config protobuf-compiler python3 xz-utils
+```
+
+### Rantai fallback
+
+Script tidak menyembunyikan kegagalan. Kalau satu jalur gagal, ia turun ke
+jalur berikutnya dan tetap melaporkannya:
+
+| Tahap | Utama | Fallback |
 |---|---|---|
-| **Installer rialoman (Aktif)** | `https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh` | Endpoint resmi S3 aktif |
-| **Installer Legacy (Mati)** | `https://rialoman.rialo.io/install.sh` | Domain tidak resolve lagi (hanya probe historis) |
-| **RPC DevNet HTTPS** | `https://devnet.rialo.io:4101` | Endpoint TLS port 4101 |
-| **RPC DevNet HTTP** | `http://devnet.rialo.io:4100` | Endpoint plain port 4100 |
+| `rialoman` | Installer S3 | `cargo install --locked --version 0.3.0 rialoman` |
+| Rialo release | `rialoman install stable@0.12.2` | `rialoman install 0.12.2` (sintaks lama) |
+| Rust toolchain | `rialoman toolchain install rialo-rust --version 0.0.3` | compile dari source via `scripts/rialo-toolchain-bootstrap` |
 
-### 1.5 Satuan & Alokasi Dana (Rent Buffer)
+URL installer yang aktif:
 
-- **1 RLO** = 1.000.000.000 kelvin (10^9 kelvin).
-- Deploy membutuhkan rent balance untuk buffer Loader V4.
-- Kasus nyata di repo: transaksi gagal dengan `insufficient kelvins 999960000, need 1068062112`.
-- **Aturan:** 1x airdrop (1 RLO) **tidak cukup**. Selalu minta airdrop 1 RLO sebanyak **2 kali** (total ~2 RLO) sebelum memulai deployment.
+```
+https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh
+```
+
+`rialoman.rialo.io` sudah mati dan tidak resolve. Ia masih ada di script hanya
+sebagai probe diagnostik, dan `HANDOVER.md` masih salah menuliskannya sebagai
+installer utama. Abaikan yang di HANDOVER.
 
 ---
 
-## 2. Bootstrap Toolchain
+## Langkah 2 — Verifikasi toolchain
 
 ```bash
-# 1. Unduh dan jalankan installer resmi dari bucket S3
-curl -fsSL https://rialo-artifacts.s3.us-east-2.amazonaws.com/rialoman/stable/install.sh | bash -s -- --no-modify-path --default-toolchain none
-
-# 2. Konfigurasi PATH ke shell environment
 export PATH="$HOME/.cargo/bin:${XDG_DATA_HOME:-$HOME/.local/share}/rialo/bin:$PATH"
 
-# 3. Pasang versi release stable@0.12.2
-rialoman install stable@0.12.2 --default
-
-# 4. Pasang toolchain rialo-rust 0.0.3
-rialoman toolchain install rialo-rust --version 0.0.3
-
-# 5. Validasi ketersediaan target RISC-V PolkaVM
+rialoman --version
+rialoman current
+cargo +rialo --version
 rustc +rialo --print target-list | grep -Fx riscv64emac-solana-solana
 ```
 
-*Peringatan:* Jika `grep -Fx riscv64emac-solana-solana` tidak menghasilkan output, hentikan proses. Jangan mengganti target ke target Solana generik (`bpf-solana-solana`) karena instruksi bytecode tidak akan dapat dieksekusi di runtime Rialo PolkaVM.
+**Kalau grep terakhir tidak mengeluarkan apa pun, berhenti di sini.**
+Jangan diganti target Solana generik — binary-nya tidak akan jalan di Rialo.
+Ulangi Langkah 1 dan baca `.rialo-bootstrap/bootstrap.log` untuk cari
+tahap mana yang gagal.
+
+### Versi yang di-pin
+
+| Komponen | Versi |
+|---|---|
+| Rialo release | `stable@0.12.2` |
+| `rialoman` | `0.3.0` (installer S3 melapor `0.3.0-alpha.0`) |
+| Rialo Rust toolchain | `0.0.3` |
+| Custom target | `riscv64emac-solana-solana` |
+| Source-build nightly | `nightly-2025-05-10` |
+| Pinned Rust commit | `dcecb99176edf2eec51613730937d21cdd5c8f6e` |
+| Venus crates | `0.12.2` |
+| `@rialo/ts-cdk` | `0.12.2` |
+
+Jangan campur versi. Program, manifest, dan CDK terikat ke `0.12.2` yang sama.
 
 ---
 
-## 3. Kompilasi Program
+## Langkah 3 — Compile program
 
-### Cara Kanonik (PDK Build):
+Perintah kanonik:
+
 ```bash
 rialo-build \
-  --program-path contracts/rexo-core \
-  --output-dir contracts/rexo-core/artifacts
+  --program-path programs/scheduled-transfer-v2 \
+  --output-dir programs/scheduled-transfer-v2/artifacts
 ```
 
-### Cara Alternatif (Crate Artifact / Cargo Direct):
+Output:
+
+```
+programs/scheduled-transfer-v2/artifacts/scheduled-transfer-v2-riscv/scheduled_transfer_v2.polkavm
+programs/scheduled-transfer-v2/wit/scheduled-transfer-v2.wit
+programs/scheduled-transfer-v2/wit/scheduled-transfer-v2-manifest.json
+```
+
+`rialo-build` sekaligus meregenerasi WIT dan manifest. Keduanya harus
+byte-identik dengan yang sudah ada di repo:
+
 ```bash
-cd contracts/rexo-core
-cargo build --manifest-path artifact/Cargo.toml --release
+git diff --exit-code -- programs/scheduled-transfer-v2/wit
 ```
 
-Output kompilasi:
-- `contracts/rexo-core/artifacts/rexo_core.polkavm` (Binary executable PolkaVM)
-- `contracts/rexo-core/wit/rexo-core.wit` (WebAssembly Interface Type definition)
-- `contracts/rexo-core/wit/rexo-core-manifest.json` (Instruction & account manifest)
+### Alternatif low-level
 
-### 3.1 Jebakan Reproducibility (Cargo Path Embedding)
-Rialo 0.12.2 menanamkan path Cargo registry lokal ke dalam binary PolkaVM. Build dengan `CARGO_HOME` berbeda akan menghasilkan hash SHA-256 yang berbeda (contoh: selisih 16 byte akibat perbedaan username di `/home/<user>/.cargo`).
+Tercatat di `HANDOVER.md`, tapi tidak meregenerasi manifest:
 
-**Mitigasi:** Gunakan environment build kanonik (seperti GitHub Actions runner `/home/runner`) atau compiler path remapping (`--remap-path-prefix`) saat memverifikasi hash produksi.
+```bash
+cd programs/scheduled-transfer-v2
+cargo build --release --target riscv64emac-solana-solana
+```
 
-### 3.2 Koreksi Client Manifest (Defect Venus 0.12.2)
-Pada Venus 0.12.2, instruksi tertentu dapat menyisipkan `subscriber_interface` di posisi yang tidak sesuai dengan urutan akun yang di-expand oleh macro Rust (payer, workflow, system, subscription, vault).
-Selalu jalankan generator manifest client untuk memverifikasi urutan akun secara deterministik sebelum integrasi frontend.
+Pakai `rialo-build` saja kecuali kamu tahu persis kenapa butuh yang ini.
+
+### Jebakan: hash bergantung pada username
+
+Rialo 0.12.2 **menanamkan path Cargo registry ke dalam binary PolkaVM**.
+Build dengan `CARGO_HOME` berbeda menghasilkan hash berbeda — kasus nyata di
+repo: selisih 16 byte, karena binary V1 mengandung `/home/achinnys/.cargo`.
+
+Untuk mereproduksi artifact lama:
+
+```bash
+CARGO_HOME=/home/achinnys/.cargo rialo-build \
+  --program-path programs/scheduled-transfer \
+  --output-dir /tmp/verify
+```
+
+Untuk program baru: pakai path build kanonik atau compiler path remapping,
+supaya reproducibility tidak bergantung pada nama user siapa pun.
+
+### Manifest client (khusus Scheduled Transfer V2)
+
+Venus 0.12.2 punya defect. Pada instruksi `cancel`, Rust hasil expand menyusun
+akun sebagai payer/workflow/system/subscription/vault, tapi manifest yang
+di-generate menyisipkan `subscriber_interface` sebelum dua akun user.
+
+Koreksinya deterministik:
+
+```bash
+node scripts/generate-scheduled-v2-client-manifest.mjs
+```
+
+Script ini *fail closed* — menolak jalan kalau urutan dari upstream bukan
+bentuk 0.12.2 yang sudah diaudit. Ini koreksi urutan interface, bukan
+tebakan discriminant atau substitusi akun.
 
 ---
 
-## 4. Persiapan Deployer Key & Faucet
+## Langkah 4 — Verifikasi hasil build
 
 ```bash
-# 1. Generate keypair disposable untuk DevNet
-rialo keytool generate --output-file ~/.config/rialo/deployer.keypair
+./scripts/verify-rialo-v1.sh
+```
 
-# 2. Cek saldo akun
+Script ini build ulang, lalu `sha256sum` + `cmp` hasil build melawan artifact
+yang di-commit. Evidence ditulis ke `.rialo-evidence/v1/`.
+
+Hash artifact yang ada di repo (sudah dicek cocok dengan `deployments/devnet.json`):
+
+| Program | SHA-256 |
+|---|---|
+| `scheduled-transfer` (V1) | `f0ede60dcd4471c0f1961cca76ad7d04e822fd727a0fc72b4425b563a89d256a` |
+| `recurring-allowance` (V1) | `c8bcdc706730aeb5dd1cb912124bc951c2bd5cc7443266e290ad43148c5c15bb` |
+| `scheduled-transfer-v2` | `c010cc54305fdf2a71592639377cd95e781da798a45aa6d8fdc4c10570c840d1` |
+| `triggerdesk-phase0` | `a8308579e75e7c37d441d691e70bcfc4c7cd3351fe10018e416a34064ade694f` |
+| `funds-path-probe` | `f3edd8503087a987ea6b2cadee8d6352256f71d2e908a5a0b2d20c6c698d01ba` |
+| `recurring-allowance-v2` | `6f3ce27cea28518e9c3cb2f3a441592cf1e6de8afe147ae23c7247747bedc3c9` |
+
+Dua yang terakhir belum terdaftar di `deployments/devnet.json` — sudah
+di-compile, belum di-deploy.
+
+**Kalau tujuanmu cuma deploy ulang program yang sudah ada, Langkah 3 dan 4
+bisa dilewati.** File `.polkavm` sudah ada di repo dan hash-nya terverifikasi.
+Langsung ke Langkah 5.
+
+---
+
+## Langkah 5 — Siapkan deployer key
+
+**⚠ CELAH 1 — perintah keypair tidak ada di repo.**
+
+`PHASE0-REPORT.md` hanya menyebut hasilnya:
+
+- alias: `phase0`
+- pubkey: `BJEbqxj2r8LyNHAwdkGEN9jLA4E9NUFu25x9uju9oZ8g`
+- file: `/home/achinnys/.config/rialo/phase0.keypair`
+
+Perintah pembuatnya tidak pernah ditulis. Cari sendiri di mesin build:
+
+```bash
+rialo client --help
+rialo client keypair --help
+```
+
+Aturan yang dipakai repo:
+
+- Keypair **disposable**, satu per deployment, DevNet-only
+- Jangan pernah di-commit
+- `.rialo-bootstrap/` dan `.rialo-evidence/` dilarang berisi signing key
+
+---
+
+## Langkah 6 — Danai deployer
+
+**⚠ CELAH 2 — perintah airdrop CLI tidak ada di repo.**
+
+Yang terdokumentasi hanya `requestAirdropAndConfirm` dari CDK di browser.
+Untuk CLI, cek:
+
+```bash
+rialo client --help
+```
+
+**Yang penting dan sudah terbukti: satu airdrop 1 RLO TIDAK CUKUP.**
+
+Deploy butuh rent untuk buffer Loader V4. Kegagalan nyata yang tercatat:
+
+```
+Transfer: insufficient kelvins 999960000, need 1068062112
+```
+
+Jadi butuh ~1,07 RLO, sementara satu airdrop cuma memberi 1 RLO. Kejadian ini
+terulang dua kali di repo (funds-path-probe dan deploy P0 surplus), dan
+dua-duanya baru berhasil setelah airdrop kedua. **Minta airdrop dua kali.**
+
+Cek saldo:
+
+```bash
 rialo client account -n devnet --json <ADDRESS> | jq -r .kelvin
-
-# 3. Lakukan 2x airdrop (minimal 1.1 RLO untuk memenuhi rent buffer Loader V4)
-rialo client airdrop -n devnet --amount 1
-sleep 2
-rialo client airdrop -n devnet --amount 1
 ```
+
+Satuan: 1 RLO = 1.000.000.000 kelvin.
 
 ---
 
-## 5. Deployment ke DevNet & Verifikasi On-Chain
+## Langkah 7 — Deploy
 
-### 5.1 Perintah Deploy
+**⚠ CELAH 3 — flag network tidak ditulis di contoh deploy.**
+
+`HANDOVER.md` dan `PHASE0-REPORT.md` menulisnya tanpa network:
+
 ```bash
 rialo client program deploy \
-  contracts/rexo-core/artifacts/rexo_core.polkavm
+  programs/scheduled-transfer-v2/artifacts/scheduled-transfer-v2-riscv/scheduled_transfer_v2.polkavm
 ```
 
-#### Mengatasi Defect CLI 0.12.2:
-1. **False Negative `InvalidArgument`:** CLI 0.12.2 terkadang melaporkan `InvalidArgument` saat melakukan polling status pasca-deploy padahal program sebenarnya sudah berhasil tersimpan di chain. Verifikasi kebenaran melalui query akun langsung (Bagian 5.2).
-2. **Infinite Polling Hang:** Jika transaksi pembuatan buffer gagal (karena kekurangan saldo rent kelvin), CLI akan menggantung (polling tanpa batas). Pastikan saldo deployer telah diisi 2x airdrop sebelum deploy.
+Padahal semua perintah lain di repo pakai `-n devnet`
+(`rialo client account -n devnet`, `rialo client get-block-height -n devnet`).
+Kemungkinan ada default config, tapi tidak dikonfirmasi. Cek:
 
-### 5.2 Verifikasi Deployment (48-Byte Loader Header Check)
+```bash
+rialo client program deploy --help
+```
 
-Satu-satunya bukti valid deployment di Rialo adalah query struktur akun:
+### Dua defect CLI 0.12.2 yang harus diantisipasi
+
+**1. Deploy berhasil tapi CLI melaporkan `InvalidArgument`.**
+Ini terjadi di retry/poll pasca-deploy. Deployment `FkqUGXxy…` sukses meski
+CLI mengeluarkan error ini. **Jangan percaya exit code** — verifikasi lewat
+query akun di Langkah 8.
+
+**2. CLI menggantung selamanya.**
+Kalau transaksi pembuatan buffer gagal (biasanya rent kurang), CLI polling
+terus ke buffer yang tidak pernah ada, dan error transaksinya tidak pernah
+disurfacing. Kelihatan seperti hang. Kalau ini terjadi, cek transaksi di chain
+— hampir pasti masalah dana, bukan masalah CLI.
+
+CLI 0.12.2 juga tidak menyimpan satu deployment transaction ID. Itu sebabnya
+semua entry di `deployments/devnet.json` punya `"deploymentTransaction": null`.
+
+---
+
+## Langkah 8 — Verifikasi deployment (WAJIB)
+
+Ini satu-satunya bukti yang dipercaya repo — bukan output CLI.
 
 ```bash
 rialo client account -n devnet --json <PROGRAM_ID>
 ```
 
-Kriteria validitas akun program:
-1. **`owner`**: Wajib bernilai `RiscVLoader11111111111111111111111111111111`
-2. **`executable`**: Bernilai `true`
-3. **Loader Header**: 48 byte pertama pada data akun dialokasikan sebagai metadata loader.
-4. **Payload Hash Matching**: Hash SHA-256 dari byte ke-49 dan seterusnya (`data[48:]`) harus **identik 100%** dengan hash SHA-256 file `.polkavm` lokal:
+Cek empat hal:
+
+| Cek | Nilai yang benar |
+|---|---|
+| `owner` | `RiscVLoader11111111111111111111111111111111` |
+| `executable` | `true` |
+| Loader header | 48 byte pertama account data |
+| Hash payload | `sha256(data[48:])` == `artifactSha256` |
+
+Hitung hash payload:
 
 ```bash
-# Verifikasi hash payload on-chain vs artifact lokal:
 rialo client account -n devnet --json <PROGRAM_ID> \
   | jq -r .data \
   | base64 -d | tail -c +49 | sha256sum
-
-sha256sum contracts/rexo-core/artifacts/rexo_core.polkavm
 ```
+
+Contoh nyata yang sudah terbukti (`3BA494eLRy15oHN4ST2Fq8Bx231xdPDfJy1tpP7hyoD6`):
+
+- account: 141.026 byte
+- header: 48 byte
+- payload: 140.978 byte
+- hash: `c010cc54305fdf2a71592639377cd95e781da798a45aa6d8fdc4c10570c840d1`
+
+Angka itu persis sama dengan `.polkavm` di repo. Kalau hash-mu cocok,
+deployment-nya sah — apa pun yang dikatakan CLI.
 
 ---
 
-## 6. Pendaftaran Program ID ke Frontend
+## Langkah 9 — Daftarkan program ID
 
-Daftarkan program ID yang terverifikasi ke dalam registry `deployments/devnet.json`:
+Registry tunggal: `deployments/devnet.json`. Dibaca `lib/rialo/network.ts`,
+diekspor lewat `lib/rialo/constants.ts`. Network selain `devnet` fail closed.
+
+Program ID **tidak pernah** ditulis hardcode di komponen UI.
+
+Tambahkan entry:
 
 ```json
-{
-  "rexoCore": {
-    "programId": "<PROGRAM_ID_TERVERIFIKASI>",
-    "schemaVersion": 1,
-    "owner": "RiscVLoader11111111111111111111111111111111",
-    "executable": true,
-    "loaderAccountHeaderBytes": 48,
-    "artifactSha256": "...",
-    "manifestSha256": "...",
-    "witSha256": "...",
-    "deployedPayloadSha256": "...",
-    "deploymentTransaction": null,
-    "notes": "Verified via Loader V4 48-byte offset payload match"
-  }
+"scheduledTransferV3": {
+  "programId": "<PROGRAM_ID_BARU>",
+  "schemaVersion": 3,
+  "owner": "RiscVLoader11111111111111111111111111111111",
+  "executable": true,
+  "loaderAccountHeaderBytes": 48,
+  "artifactSha256": "…",
+  "manifestSha256": "…",
+  "clientManifestSha256": "…",
+  "witSha256": "…",
+  "deployedPayloadSha256": "…",
+  "deploymentTransaction": null,
+  "notes": "…"
 }
 ```
 
-Frontend memanggil RPC via proxy server `/api/rpc` untuk menghindari masalah CORS browser.
+Lalu arahkan `DEVNET.scheduledTransfer` di `lib/rialo/network.ts` ke entry baru.
+
+Yang sudah terdaftar:
+
+| Key | Program ID | Status |
+|---|---|---|
+| `scheduledTransferV2` | `FkqUGXxy8y4PHGdRmtJLvKMp1h48EeeWaz8KCFi9ZAwS` | V2 schema-stable |
+| `scheduledTransferV2SurplusP0Test` | `3BA494eLRy15oHN4ST2Fq8Bx231xdPDfJy1tpP7hyoD6` | **aktif dipakai UI** |
+| `scheduledTransferV1` | `7BcfcJEJPxatpejoHjbWfPNnEnEsnk3fh1toN4pYCuxh` | historis |
+| `recurringAllowanceV1` | `6TpMo9xFFLYktHhmXzaTkBp2rPTzAuLrk699W7NAW7RZ` | historis |
 
 ---
 
-## 7. Analisis Komparatif: Kasus Permitly
+## Langkah 10 — Deploy frontend
 
-Studi kasus Permitly penting dipahami sebagai referensi apa yang **tidak boleh** dilakukan:
+Gate lokal dulu:
 
-1. **File Pseudo-DSL (`.rialo`):** Permitly menggunakan file teks 963 baris dengan sintaks `workflow { state { ... } }` tanpa Rust crate, `Cargo.toml`, atau toolchain Venus.
-2. **Script Deploy Non-Standar:** Menggunakan script yang mengirim string source mentah melalui method JSON-RPC `deployProgram` alih-alih meng-upload binary PolkaVM ke Loader V4.
-3. **Silent Fallback to Mock:** Adapter RPC diam-diam beralih ke mode mock saat panggilan RPC gagal, sehingga transaksi tampak sukses padahal tidak pernah menyentuh chain.
+```bash
+npm ci
+npm run lint
+npm run typecheck
+npm test -- --runInBand
+npm run build
+npm audit --audit-level=high
+```
 
-**Prinsip Rexo:** Selalu gunakan alur kanonik Rust + Venus DSL, kompilasi ke target RISC-V PolkaVM, dan verifikasi hash payload 48-byte offset di on-chain Loader V4.
+Vercel:
 
----
-
-## 8. Limitasi Diketahui (Rialo 0.12.2)
-
-| Isu / Konstruksi | Dampak & Solusi Workaround |
+| Setting | Nilai |
 |---|---|
-| **Konstruk `AFTER`** | Menghasilkan `active_commits = slot..=slot + 100` (jendela eksekusi ~100 blok). Workflow jeda panjang belum dapat dieksekusi reliabel di luar jendela tersebut. |
-| **`unix_timestamp()`** | Mengembalikan nilai 0 di environment tertentu (terbaca 1970 pada UI), namun tidak memengaruhi logika slot-based. |
-| **Konstruk `EVERY`** | Untuk recurring loop, implementasikan transisi berantai melalui beberapa handler event diskrit. |
-| **Lineage Query** | `getWorkflowLineage` belum menyertakan child workflow lengkap; gunakan `getSignaturesForAddress` pada PDA workflow. |
+| Framework | Next.js |
+| Build command | `npm run build` |
+| Output | `.next` |
+| Install | `npm ci` |
+| Env vars | Tidak ada yang wajib; opsional `NEXT_PUBLIC_RIALO_NETWORK=devnet` |
+
+Browser tidak memanggil DevNet langsung — lewat proxy `/api/rpc` dengan
+allowlist method, untuk menghindari CORS. Monitoring lewat `/api/health`.
+
+Kalau build gagal karena `@rialo/ts-cdk` tidak ketemu, konfigurasi `.npmrc`
+ke registry Rialo.
+
+RPC DevNet:
+
+- HTTPS: `https://devnet.rialo.io:4101` (dipakai `deployments/devnet.json`)
+- HTTP: `http://devnet.rialo.io:4100`
+
+**Urutan wajib:** deploy frontend hanya setelah registry berisi program ID
+yang sudah diverifikasi.
 
 ---
 
-## 9. Checklist Rilis Pra-Deploy
+## Limitasi Rialo 0.12.2
 
-### Toolchain & Environment
-- [ ] Host Ubuntu 22.04 LTS (4 vCPU / 8 GB RAM / 80 GB SSD).
-- [ ] Toolchain `rialo-rust 0.0.3` terpasang dan target `riscv64emac-solana-solana` terdaftar di `rustc +rialo --print target-list`.
-- [ ] `rustc --test contracts/rexo-core/src/curve.rs` lolos seluruh 21 tes invariasi matematika bonding curve.
+| Isu | Dampak |
+|---|---|
+| `AFTER` → `active_commits = slot..=slot + 100` | Jendela eksekusi hanya ~100 blok. Workflow 5 menit terlewat dan tidak jalan. Ini alasan tombol create di UI dimatikan |
+| `unix_timestamp()` mengembalikan 0 | Created-at tampil 1970. Tidak memengaruhi eksekusi |
+| Tidak ada konstruk `EVERY` | Recurring allowance diakali 3x `AFTER` terpisah, jumlah tetap |
+| Kunci ephemeral | Keypair per tab di sessionStorage, hilang saat tab ditutup |
+| DevNet-only | Tidak ada jalur mainnet |
+| `getWorkflowLineage` | `workflowChildren` dan `subscriptions` kosong; pakai `getSignaturesForAddress` pada workflow PDA |
 
-### Build & Artifact
-- [ ] Kompilasi via `rialo-build` atau `cargo build --manifest-path artifact/Cargo.toml --release` berhasil menghasilkan `.polkavm`.
-- [ ] File WIT dan manifest akun sinkron dengan struktur interface Rust.
-- [ ] SHA-256 binary artifact tercatat dan diverifikasi.
+---
 
-### Deploy & On-Chain Verification
-- [ ] Menggunakan keypair disposable khusus DevNet.
-- [ ] Saldo deployer memiliki minimal 2x airdrop (≥ ~1.1 RLO) untuk memenuhi rent buffer Loader V4.
-- [ ] Program di-deploy menggunakan `rialo client program deploy`.
-- [ ] Query akun membuktikan: `owner == RiscVLoader11111111111111111111111111111111`, `executable == true`, dan `sha256(data[48:]) == artifactSha256`.
-- [ ] Program ID terdaftar di `deployments/devnet.json` dan diuji melalui frontend proxy.
+## Aturan yang tidak boleh dilanggar
+
+- Jangan auto-deploy program finansial dari merge ke `main`
+- Jangan percaya exit code CLI deploy — verifikasi lewat query akun
+- Jangan ganti target ke Solana generik kalau toolchain Rialo gagal dipasang
+- Jangan bayar dari backend kalau callback gagal; pakai instruksi recovery on-chain
+- Jangan commit signing key ke direktori evidence mana pun
+- Jangan klaim scheduling jangka panjang selama limitasi 100 blok belum hilang
+
+---
+
+## Checklist
+
+**Toolchain**
+- [ ] Ubuntu 22.04, 4 vCPU / 8 GB / 80 GB
+- [ ] `bootstrap-rialo-dev.sh` selesai tanpa error
+- [ ] `rustc +rialo --print target-list` memuat `riscv64emac-solana-solana`
+
+**Build** *(lewati kalau deploy ulang artifact yang sudah ada)*
+- [ ] `rialo-build` menghasilkan `.polkavm` + WIT + manifest
+- [ ] `git diff --exit-code` pada `wit/` bersih
+- [ ] Hash build == hash artifact di repo
+- [ ] Client manifest V2 di-generate ulang dan lolos fail-closed check
+
+**Deploy**
+- [ ] Keypair disposable DevNet dibuat
+- [ ] Saldo ≥ ~1,1 RLO (dua kali airdrop)
+- [ ] `rialo client program deploy` dijalankan
+- [ ] Owner = Loader, executable = true, header 48 byte, hash payload cocok
+- [ ] Program ID + semua hash dicatat di `deployments/devnet.json`
+
+**Frontend**
+- [ ] npm ci / lint / typecheck / test / build / audit lolos
+- [ ] `network.ts` menunjuk entry registry yang benar
+- [ ] Deploy Vercel, `/api/health` hijau
+- [ ] Smoke test: connect → airdrop → create → callback → **balance penerima berubah**
+
+Poin terakhir yang menentukan. Perubahan state saja tidak cukup — delta saldo
+penerima adalah satu-satunya bukti dana benar-benar bergerak.
