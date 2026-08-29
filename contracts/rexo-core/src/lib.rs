@@ -3,11 +3,13 @@
 pub mod curve;
 
 use rialo_venus_proc_macro::rialo;
+use rialo_s_program::entrypoint::ProgramResult;
+use rialo_s_program::pubkey::Pubkey;
 
 rialo! {
     state {
-        creator: rialo_s_program::pubkey::Pubkey,
-        mint: rialo_s_program::pubkey::Pubkey,
+        creator: Pubkey,
+        mint: Pubkey,
         name: String,
         symbol: String,
         metadata_uri: String,
@@ -38,15 +40,12 @@ rialo! {
         sealed_until: u64,
         sealed_order_count: u32,
         sealed_cursor: u32,
-        sfs_position: rialo_s_program::pubkey::Pubkey,
+        sfs_position: Pubkey,
         sfs_funded: u128,
         dex_pool: String,
     }
 
     program {
-        use rialo_s_program::entrypoint::ProgramResult;
-        use rialo_s_program::pubkey::Pubkey;
-
         initiating fn launch(
             &mut self,
             name: String,
@@ -56,16 +55,33 @@ rialo! {
             x_handle: String,
             bond: u128,
         ) -> ProgramResult {
+            self.creator = Pubkey::default();
+            self.mint = Pubkey::default();
+            self.sfs_position = Pubkey::default();
             self.name = name;
             self.symbol = symbol;
             self.metadata_uri = metadata_uri;
             self.telegram_handle = telegram_handle;
             self.x_handle = x_handle;
-            self.bond = bond;
             self.tier = 0;
-            self.abandoned = false;
-            self.complete = false;
+            self.verified_at = 0;
+            self.telegram_members = 0;
+            self.x_account_age_days = 0;
             self.heartbeat_failures = 0;
+            self.abandoned = false;
+            self.cfg_virtual_quote = 30_000_000_000;
+            self.cfg_virtual_token = 1_073_000_000_000_000;
+            self.cfg_curve_supply = 793_100_000_000_000;
+            self.cfg_lp_reserve = 206_900_000_000_000;
+            self.virtual_quote = 30_000_000_000;
+            self.virtual_token = 1_073_000_000_000_000;
+            self.real_quote = 0;
+            self.real_token = 793_100_000_000_000;
+            self.fees_protocol = 0;
+            self.fees_creator = 0;
+            self.forfeited_quote = 0;
+            self.complete = false;
+            self.bond = bond;
             self.bond_returned = false;
             self.creator_tokens_locked = 0;
             self.creator_tranches_unlocked = 0;
@@ -74,12 +90,6 @@ rialo! {
             self.sealed_cursor = 0;
             self.sfs_funded = 0;
             self.dex_pool = String::new();
-            self.fees_protocol = 0;
-            self.fees_creator = 0;
-            self.forfeited_quote = 0;
-            self.verified_at = 0;
-            self.telegram_members = 0;
-            self.x_account_age_days = 0;
 
             Ok(())
         }
@@ -117,4 +127,5 @@ rialo! {
         }
     }
 }
+
 
