@@ -106,9 +106,7 @@ jobs:
           echo "--> Memasang toolchain rialo-rust versi ${RIALO_TOOLCHAIN_VERSION}..."
           if ! rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"; then
             echo "Prebuilt toolchain unavailable; building with repository rialo-build-lib 0.12.2 helper..."
-            cargo run --release \
-              --manifest-path "scripts/rialo-toolchain-bootstrap/Cargo.toml" \
-              -- "${RIALO_TOOLCHAIN_VERSION}"
+            cargo run --release               --manifest-path "scripts/rialo-toolchain-bootstrap/Cargo.toml"               -- "${RIALO_TOOLCHAIN_VERSION}"
           fi
           
           rialoman list
@@ -172,9 +170,13 @@ jobs:
           echo "=== Menjalankan rialo-build terhadap ${CONTRACT_DIR} ==="
           mkdir -p "${CONTRACT_DIR}/artifacts"
           
-          rialo-build \
+          if ! rialo-build \
             --program-path "${CONTRACT_DIR}" \
-            --output-dir "${CONTRACT_DIR}/artifacts"
+            --output-dir "${CONTRACT_DIR}/artifacts"; then
+            echo "::error::rialo-build gagal! Menjalankan cargo build langsung untuk menampilkan pesan compiler lengkap:"
+            cargo build --manifest-path "${CONTRACT_DIR}/Cargo.toml" --target riscv64emac-solana-solana --verbose || true
+            exit 1
+          fi
             
           ls -la "${CONTRACT_DIR}/artifacts/"
 
@@ -346,10 +348,10 @@ jobs:
           echo "VERIFIKASI SUKSES: Payload on-chain 100% identik dengan artifact lokal."
           
           echo "### Ringkasan Deployment ke ${{ inputs.network }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Program ID**: \`${PROGRAM_ID}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Loader**: \`${OWNER}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Executable**: \`${EXECUTABLE}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SHA-256 (Payload offset +48B)**: \`${ONCHAIN_PAYLOAD_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Program ID**: `${PROGRAM_ID}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Loader**: `${OWNER}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Executable**: `${EXECUTABLE}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SHA-256 (Payload offset +48B)**: `${ONCHAIN_PAYLOAD_SHA}`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wipe Keypair
         if: always()
