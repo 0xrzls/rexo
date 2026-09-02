@@ -348,10 +348,10 @@ jobs:
           echo "VERIFIKASI SUKSES: Payload on-chain 100% identik dengan artifact lokal."
           
           echo "### Ringkasan Deployment ke ${{ inputs.network }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Program ID**: \`${PROGRAM_ID}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Loader**: \`${OWNER}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Executable**: \`${EXECUTABLE}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SHA-256 (Payload offset +48B)**: \`${ONCHAIN_PAYLOAD_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Program ID**: `${PROGRAM_ID}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Loader**: `${OWNER}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Executable**: `${EXECUTABLE}`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SHA-256 (Payload offset +48B)**: `${ONCHAIN_PAYLOAD_SHA}`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Wipe Keypair
         if: always()
