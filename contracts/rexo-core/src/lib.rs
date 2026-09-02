@@ -3,12 +3,11 @@
 pub mod curve;
 
 use rialo_venus_proc_macro::rialo;
-use rialo_s_program::entrypoint::ProgramResult;
-use rialo_s_program::pubkey::Pubkey;
 
 rialo! {
-    state {
-        creator: Pubkey,
+    workflow {
+        state {
+            creator: Pubkey,
         mint: Pubkey,
         name: String,
         symbol: String,
@@ -46,6 +45,11 @@ rialo! {
     }
 
     program {
+        use rialo_s_program::{
+            entrypoint::ProgramResult,
+            pubkey::Pubkey,
+        };
+
         initiating fn launch(
             &mut self,
             name: String,
@@ -127,5 +131,7 @@ rialo! {
         }
     }
 }
+}
+
 
 
