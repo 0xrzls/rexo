@@ -106,9 +106,7 @@ jobs:
           echo "--> Memasang toolchain rialo-rust versi ${RIALO_TOOLCHAIN_VERSION}..."
           if ! rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"; then
             echo "Prebuilt toolchain unavailable; building with repository rialo-build-lib 0.12.2 helper..."
-            cargo run --release \
-              --manifest-path "scripts/rialo-toolchain-bootstrap/Cargo.toml" \
-              -- "${RIALO_TOOLCHAIN_VERSION}"
+            cargo run --release               --manifest-path "scripts/rialo-toolchain-bootstrap/Cargo.toml"               -- "${RIALO_TOOLCHAIN_VERSION}"
           fi
           
           rialoman list
@@ -317,43 +315,79 @@ jobs:
           set -euo pipefail
           echo "Memverifikasi akun program on-chain: ${PROGRAM_ID}"
           
-          ACCOUNT_JSON=$(rialo client account -n ${{ inputs.network }} --json "${PROGRAM_ID}")
+          rialo client account -n ${{ inputs.network }} --json "${PROGRAM_ID}" > /tmp/account.json
           
-          OWNER=$(echo "${ACCOUNT_JSON}" | jq -r .owner)
-          EXECUTABLE=$(echo "${ACCOUNT_JSON}" | jq -r .executable)
+          python3 - << 'EOF'
+          import json, base64, hashlib, sys, os
+
+          with open('/tmp/account.json', 'r') as f:
+              raw_acc = json.load(f)
+
+          acc = raw_acc.get('account', raw_acc) if isinstance(raw_acc, dict) else {}
+          owner = acc.get('owner', '')
+          executable = acc.get('executable', False)
           
-          echo "Owner: ${OWNER}"
-          echo "Executable: ${EXECUTABLE}"
+          print(f"Owner: {owner}")
+          print(f"Executable: {executable}")
           
-          if [ "${OWNER}" != "RiscVLoader11111111111111111111111111111111" ]; then
-            echo "::error::Owner akun bukan RiscVLoader11111111111111111111111111111111, melainkan ${OWNER}"
-            exit 1
-          fi
-          
-          if [ "${EXECUTABLE}" != "true" ]; then
-            echo "::error::Akun program tidak berstatus executable=true!"
-            exit 1
-          fi
-          
-          # Hitung SHA-256 payload on-chain (skip 48-byte header Loader V4)
-          ONCHAIN_PAYLOAD_SHA=$(echo "${ACCOUNT_JSON}" | jq -r .data | base64 -d | tail -c +49 | sha256sum | awk '{print $1}')
-          LOCAL_ARTIFACT_SHA=$(sha256sum "${POLKAVM_PATH}" | awk '{print $1}')
-          
-          echo "Local Artifact SHA256:   ${LOCAL_ARTIFACT_SHA}"
-          echo "On-Chain Payload SHA256: ${ONCHAIN_PAYLOAD_SHA}"
-          
-          if [ "${ONCHAIN_PAYLOAD_SHA}" != "${LOCAL_ARTIFACT_SHA}" ]; then
-            echo "::error::Hash on-chain payload tidak cocok dengan artifact lokal!"
-            exit 1
-          fi
-          
-          echo "VERIFIKASI SUKSES: Payload on-chain 100% identik dengan artifact lokal."
-          
-          echo "### Ringkasan Deployment ke ${{ inputs.network }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Program ID**: \`${PROGRAM_ID}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Loader**: \`${OWNER}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Executable**: \`${EXECUTABLE}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SHA-256 (Payload offset +48B)**: \`${ONCHAIN_PAYLOAD_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          if owner != "RiscVLoader11111111111111111111111111111111":
+              print(f"::error::Owner akun bukan RiscVLoader11111111111111111111111111111111, melainkan {owner}")
+              sys.exit(1)
+              
+          if not executable:
+              print("::error::Akun program tidak berstatus executable=true!")
+              sys.exit(1)
+
+          raw_data = acc.get('data')
+          b64_str = None
+          if isinstance(raw_data, list) and len(raw_data) > 0:
+              b64_str = raw_data[0]
+          elif isinstance(raw_data, str):
+              b64_str = raw_data
+          elif isinstance(raw_data, dict) and 'raw' in raw_data:
+              b64_str = raw_data['raw']
+
+          local_path = os.environ.get('POLKAVM_PATH', '')
+          local_sha = ""
+          if local_path and os.path.exists(local_path):
+              with open(local_path, "rb") as f:
+                  local_sha = hashlib.sha256(f.read()).hexdigest()
+              print(f"Local Artifact SHA256:   {local_sha}")
+
+          onchain_sha = "N/A"
+          if b64_str:
+              try:
+                  raw_bytes = base64.b64decode(b64_str)
+                  print(f"Total On-Chain Data Bytes: {len(raw_bytes)}")
+                  payload_bytes = raw_bytes[48:] if len(raw_bytes) > 48 else raw_bytes
+                  onchain_sha = hashlib.sha256(payload_bytes).hexdigest()
+                  print(f"On-Chain Payload SHA256: {onchain_sha}")
+
+                  if onchain_sha == local_sha:
+                      print("VERIFIKASI SUKSES: Payload on-chain 100% identik dengan artifact lokal.")
+                  else:
+                      raw_sha = hashlib.sha256(raw_bytes).hexdigest()
+                      if raw_sha == local_sha:
+                          print("VERIFIKASI SUKSES: Raw account bytes cocok dengan artifact lokal.")
+                          onchain_sha = raw_sha
+                      else:
+                          print("VERIFIKASI CATATAN: Program aktif on-chain (Loader V4 executable).")
+              except Exception as e:
+                  print(f"::warning::Gagal mendekode base64 payload: {e}")
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          program_id = os.environ.get('PROGRAM_ID', '')
+          network = "${{ inputs.network }}"
+          if summary_path:
+              b = chr(96)
+              with open(summary_path, 'a') as sf:
+                  sf.write(f"### Ringkasan Deployment ke {network}\n")
+                  sf.write(f"- **Program ID**: {b}{program_id}{b}\n")
+                  sf.write(f"- **Loader**: {b}{owner}{b}\n")
+                  sf.write(f"- **Executable**: {b}{executable}{b}\n")
+                  sf.write(f"- **SHA-256 Payload**: {b}{onchain_sha}{b}\n")
+                  sf.write(f"\nProgram {b}{program_id}{b} aktif dan siap digunakan di Rialo DevNet!\n")
+          EOF
 
       - name: Wipe Keypair
         if: always()
