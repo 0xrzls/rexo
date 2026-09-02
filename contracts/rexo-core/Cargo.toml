@@ -1,45 +1,42 @@
 [package]
-name = "coldstart"
+name = "rexo-core"
+description = "Meme coin launchpad native untuk Rialo"
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
-description = "Meme coin launchpad native untuk Rialo"
+publish = false
 
-# ---------------------------------------------------------------------------
-# JANGAN TEBAK NAMA CRATE VENUS PDK.
-#
-# Salin blok [dependencies] dari Cargo.toml root di
-# https://github.com/SubzeroLabs/rialo-examples — di sana versinya sudah
-# di-pin ke crate yang benar-benar dipublikasikan, jadi build-nya
-# standalone dengan toolchain Rust biasa.
-#
-#   git clone https://github.com/SubzeroLabs/rialo-examples
-#   cd rialo-examples && cargo check --workspace
-#   cp -r venus/http-fetch ~/coldstart-live
-#
-# Kalau contoh yang kamu salin punya blok `rex {}`, ikut bawa
-# wit/rex-component.wit. Macro Venus membacanya saat build di luar
-# monorepo, dan crate yang dipublikasikan tidak menyertakannya.
-# ---------------------------------------------------------------------------
-
-[dependencies]
-rialo-venus = { version = "0.12.2" }
-rialo-venus-proc-macro = { version = "0.12.2" }
-rialo-venus-dsl = { version = "0.12.2" }
-rialo-types = { version = "0.12.2" }
-rialo-s-program = { version = "0.12.2" }
-serde = { version = "1.0", features = ["derive"] }
-bincode = "1.3"
-borsh = "1.5"
+[package.metadata.cargo-machete]
+ignored = ["rialo-venus"]
 
 [lib]
+crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
-# ---------------------------------------------------------------------------
-# src/curve.rs sengaja tanpa dependency dan bisa diuji sendiri:
-#   rustc --test src/curve.rs -o /tmp/curve_test && /tmp/curve_test
-#
-# `rialo client program deploy-venus` mengharapkan crate `artifact/`
-# tiga-file di samping program. Salin bentuknya dari tutorial
-# "Fetch web data from a program" di docs.rialo.io.
-# ---------------------------------------------------------------------------
+[features]
+implementation = []
+
+[lints.rust]
+future_incompatible = "warn"
+nonstandard_style = "warn"
+rust_2018_idioms = "warn"
+unsafe_code = "warn"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = [
+    'cfg(target_feature, values("static-syscalls"))',
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("frozen-abi", "no-entrypoint", "custom-panic", "custom-heap"))',
+    'cfg(msim)',
+    'cfg(fail_points)',
+    'cfg(rialo_simtest_seed_sweep)',
+    'cfg(bazel)',
+]
+
+[dependencies]
+rialo-s-program = { version = "0.12.2", default-features = false }
+rialo-s-program-error = { version = "0.12.2", features = ["borsh"] }
+rialo-venus = { version = "0.12.2" }
+rialo-venus-proc-macro = { version = "0.12.2" }
+serde = { version = "1.0", features = ["derive"] }
+
