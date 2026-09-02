@@ -106,7 +106,9 @@ jobs:
           echo "--> Memasang toolchain rialo-rust versi ${RIALO_TOOLCHAIN_VERSION}..."
           if ! rialoman toolchain install rialo-rust --version "${RIALO_TOOLCHAIN_VERSION}"; then
             echo "Prebuilt toolchain unavailable; building with repository rialo-build-lib 0.12.2 helper..."
-            cargo run --release               --manifest-path "scripts/rialo-toolchain-bootstrap/Cargo.toml"               -- "${RIALO_TOOLCHAIN_VERSION}"
+            cargo run --release \
+              --manifest-path "scripts/rialo-toolchain-bootstrap/Cargo.toml" \
+              -- "${RIALO_TOOLCHAIN_VERSION}"
           fi
           
           rialoman list
@@ -379,14 +381,13 @@ jobs:
           program_id = os.environ.get('PROGRAM_ID', '')
           network = "${{ inputs.network }}"
           if summary_path:
-              b = chr(96)
               with open(summary_path, 'a') as sf:
                   sf.write(f"### Ringkasan Deployment ke {network}\n")
-                  sf.write(f"- **Program ID**: {b}{program_id}{b}\n")
-                  sf.write(f"- **Loader**: {b}{owner}{b}\n")
-                  sf.write(f"- **Executable**: {b}{executable}{b}\n")
-                  sf.write(f"- **SHA-256 Payload**: {b}{onchain_sha}{b}\n")
-                  sf.write(f"\nProgram {b}{program_id}{b} aktif dan siap digunakan di Rialo DevNet!\n")
+                  sf.write(f"- **Program ID**: `{program_id}`\n")
+                  sf.write(f"- **Loader**: `{owner}`\n")
+                  sf.write(f"- **Executable**: `{executable}`\n")
+                  sf.write(f"- **SHA-256 Payload**: `{onchain_sha}`\n")
+                  sf.write(f"\nProgram `{program_id}` aktif dan siap digunakan di Rialo DevNet!\n")
           EOF
 
       - name: Wipe Keypair
