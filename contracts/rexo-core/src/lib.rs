@@ -1,137 +1,153 @@
-//! # Coldstart — Meme coin launchpad native untuk Rialo
+//! # Rexo Core — Meme coin launchpad native untuk Rialo
+//!
+//! Workflow Venus 0.12.2 native dengan callback otomatis, kurva pump.fun terkalibrasi,
+//! dan kontrol status on-chain.
 
 pub mod curve;
 
 use rialo_venus_proc_macro::rialo;
 
+pub const STATUS_UNINITIALIZED: u8 = 0;
+pub const STATUS_ACTIVE: u8 = 1;
+pub const STATUS_GRADUATED: u8 = 2;
+pub const STATUS_CANCELLED: u8 = 3;
+
 rialo! {
     workflow {
         state {
             creator: Pubkey,
-        mint: Pubkey,
-        name: String,
-        symbol: String,
-        metadata_uri: String,
-        telegram_handle: String,
-        x_handle: String,
-        tier: u8,
-        verified_at: u64,
-        telegram_members: u64,
-        x_account_age_days: u64,
-        heartbeat_failures: u32,
-        abandoned: bool,
-        cfg_virtual_quote: u128,
-        cfg_virtual_token: u128,
-        cfg_curve_supply: u128,
-        cfg_lp_reserve: u128,
-        virtual_quote: u128,
-        virtual_token: u128,
-        real_quote: u128,
-        real_token: u128,
-        fees_protocol: u128,
-        fees_creator: u128,
-        forfeited_quote: u128,
-        complete: bool,
-        bond: u128,
-        bond_returned: bool,
-        creator_tokens_locked: u128,
-        creator_tranches_unlocked: u8,
-        sealed_until: u64,
-        sealed_order_count: u32,
-        sealed_cursor: u32,
-        sfs_position: Pubkey,
-        sfs_funded: u128,
-        dex_pool: String,
-    }
-
-    program {
-        use rialo_s_program::{
-            entrypoint::ProgramResult,
-            pubkey::Pubkey,
-        };
-
-        initiating fn launch(
-            &mut self,
-            name: String,
-            symbol: String,
-            metadata_uri: String,
-            telegram_handle: String,
-            x_handle: String,
-            bond: u128,
-        ) -> ProgramResult {
-            self.creator = Pubkey::default();
-            self.mint = Pubkey::default();
-            self.sfs_position = Pubkey::default();
-            self.name = name;
-            self.symbol = symbol;
-            self.metadata_uri = metadata_uri;
-            self.telegram_handle = telegram_handle;
-            self.x_handle = x_handle;
-            self.tier = 0;
-            self.verified_at = 0;
-            self.telegram_members = 0;
-            self.x_account_age_days = 0;
-            self.heartbeat_failures = 0;
-            self.abandoned = false;
-            self.cfg_virtual_quote = 30_000_000_000;
-            self.cfg_virtual_token = 1_073_000_000_000_000;
-            self.cfg_curve_supply = 793_100_000_000_000;
-            self.cfg_lp_reserve = 206_900_000_000_000;
-            self.virtual_quote = 30_000_000_000;
-            self.virtual_token = 1_073_000_000_000_000;
-            self.real_quote = 0;
-            self.real_token = 793_100_000_000_000;
-            self.fees_protocol = 0;
-            self.fees_creator = 0;
-            self.forfeited_quote = 0;
-            self.complete = false;
-            self.bond = bond;
-            self.bond_returned = false;
-            self.creator_tokens_locked = 0;
-            self.creator_tranches_unlocked = 0;
-            self.sealed_until = 0;
-            self.sealed_order_count = 0;
-            self.sealed_cursor = 0;
-            self.sfs_funded = 0;
-            self.dex_pool = String::new();
-
-            Ok(())
+            mint: Pubkey,
+            tier: u8,
+            status: u8,
+            heartbeat_interval: u64,
+            heartbeat_count: u64,
+            created_at: u64,
+            virtual_quote_kelvins: u64,
+            virtual_token_supply: u64,
+            real_quote_kelvins: u64,
+            real_token_reserves: u64,
+            total_fee_collected: u64,
+            bond_kelvins: u64,
+            graduated_at: u64,
         }
 
-        control fn buy(&mut self, quote_in: u128, min_tokens_out: u128) -> ProgramResult {
-            let _ = (quote_in, min_tokens_out);
-            Ok(())
-        }
+        program {
+            use rialo_s_program::{
+                entrypoint::ProgramResult,
+                msg,
+                pubkey::Pubkey,
+            };
 
-        control fn sell(&mut self, tokens_in: u128, min_quote_out: u128) -> ProgramResult {
-            let _ = (tokens_in, min_quote_out);
-            Ok(())
-        }
+            initiating fn launch(
+                &mut self,
+                creator: Pubkey,
+                mint: Pubkey,
+                tier: u8,
+                bond_kelvins: u64,
+                heartbeat_interval: u64,
+            ) -> ProgramResult {
+                msg!(
+                    "RexoCore::launch creator={} mint={} tier={} bond={} interval={}",
+                    creator,
+                    mint,
+                    tier,
+                    bond_kelvins,
+                    heartbeat_interval
+                );
 
-        control fn settle_sealed_batch(&mut self) -> ProgramResult {
-            self.sealed_until = 0;
-            Ok(())
-        }
+                self.creator = creator;
+                self.mint = mint;
+                self.tier = tier;
+                self.status = crate::STATUS_ACTIVE;
+                self.bond_kelvins = bond_kelvins;
+                self.heartbeat_interval = heartbeat_interval;
+                self.heartbeat_count = 0;
+                self.created_at = self.unix_timestamp() as u64;
+                self.graduated_at = 0;
 
-        control fn heartbeat(&mut self) -> ProgramResult {
-            Ok(())
-        }
+                // Konstanta standar bonding curve pump.fun dalam desimal native:
+                // Quote: 30 RLO = 30_000_000_000 Kelvins (9 desimal)
+                // Token: 1_073_000_000_000_000 (6 desimal)
+                self.virtual_quote_kelvins = 30_000_000_000;
+                self.virtual_token_supply = 1_073_000_000_000_000;
+                self.real_quote_kelvins = 0;
+                self.real_token_reserves = 793_100_000_000_000;
+                self.total_fee_collected = 0;
 
-        control fn check_vesting(&mut self) -> ProgramResult {
-            Ok(())
-        }
+                let next_heartbeat = self.created_at + heartbeat_interval;
+                AFTER next_heartbeat CALL [on_heartbeat];
 
-        control fn graduate(&mut self) -> ProgramResult {
-            Ok(())
-        }
+                msg!("RexoCore::launched status=active next_heartbeat={}", next_heartbeat);
+                Ok(())
+            }
 
-        terminating fn finalize(&mut self) -> ProgramResult {
-            self.complete = true;
-            Ok(())
+            handler fn on_heartbeat(&mut self) -> ProgramResult {
+                msg!("RexoCore::on_heartbeat count={}", self.heartbeat_count);
+                if self.status == crate::STATUS_ACTIVE {
+                    self.heartbeat_count += 1;
+                    let now = self.unix_timestamp() as u64;
+                    let next_tick = now + self.heartbeat_interval;
+                    AFTER next_tick CALL [on_heartbeat];
+                }
+                Ok(())
+            }
+
+            control fn buy(
+                &mut self,
+                quote_in_kelvins: u64,
+                min_tokens_out: u64,
+            ) -> ProgramResult {
+                let _ = (quote_in_kelvins, min_tokens_out);
+                msg!("RexoCore::buy quote_in={}", quote_in_kelvins);
+                Ok(())
+            }
+
+            control fn sell(
+                &mut self,
+                tokens_in: u64,
+                min_quote_out_kelvins: u64,
+            ) -> ProgramResult {
+                let _ = (tokens_in, min_quote_out_kelvins);
+                msg!("RexoCore::sell tokens_in={}", tokens_in);
+                Ok(())
+            }
+
+            control fn graduate(&mut self) -> ProgramResult {
+                msg!("RexoCore::graduate");
+                if self.status == crate::STATUS_ACTIVE {
+                    self.status = crate::STATUS_GRADUATED;
+                    self.graduated_at = self.unix_timestamp() as u64;
+                }
+                Ok(())
+            }
+
+            control fn get_state(&mut self) -> ProgramResult {
+                msg!(
+                    "RexoCore::state status={} creator={} mint={} quote={} tokens={}",
+                    self.status,
+                    self.creator,
+                    self.mint,
+                    self.real_quote_kelvins,
+                    self.real_token_reserves
+                );
+                Ok(())
+            }
+
+            terminating fn cancel(&mut self) -> ProgramResult {
+                msg!("RexoCore::cancel");
+                if self.status == crate::STATUS_ACTIVE {
+                    self.status = crate::STATUS_CANCELLED;
+                }
+                Ok(())
+            }
+
+            terminating fn finalize(&mut self) -> ProgramResult {
+                msg!("RexoCore::finalize");
+                if self.status == crate::STATUS_GRADUATED {
+                    msg!("RexoCore::finalized pool completed");
+                }
+                Ok(())
+            }
         }
     }
 }
-}
-
-
-
