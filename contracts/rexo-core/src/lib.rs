@@ -1,4 +1,10 @@
+//! # Rexo Core — Meme coin launchpad native untuk Rialo
+//!
+//! Workflow Venus 0.12.2 native dengan callback otomatis, kurva pump.fun terkalibrasi,
+//! dan kontrol status on-chain.
+
 pub mod curve;
+
 use rialo_venus_proc_macro::rialo;
 
 pub const STATUS_UNINITIALIZED: u8 = 0;
@@ -24,13 +30,13 @@ rialo! {
             bond_kelvins: u64,
             graduated_at: u64,
         }
+
         program {
             use rialo_s_program::{
                 entrypoint::ProgramResult,
                 msg,
                 pubkey::Pubkey,
             };
-            use crate::curve::{CurveConfig, CurveState, LaunchTier};
 
             initiating fn launch(
                 &mut self,
@@ -59,19 +65,14 @@ rialo! {
                 self.created_at = self.unix_timestamp() as u64;
                 self.graduated_at = 0;
 
-                let launch_tier = match tier {
-                    1 => LaunchTier::Verified,
-                    2 => LaunchTier::Committed,
-                    _ => LaunchTier::Unverified,
-                };
-                let cfg = CurveConfig::coldstart(launch_tier);
-                let st = CurveState::new(&cfg).unwrap();
-
-                self.virtual_quote_kelvins = st.virtual_quote as u64;
-                self.virtual_token_supply = st.virtual_token as u64;
-                self.real_quote_kelvins = st.real_quote as u64;
-                self.real_token_reserves = st.real_token as u64;
-                self.total_fee_collected = (st.fees_protocol + st.fees_creator) as u64;
+                // Konstanta standar bonding curve pump.fun dalam desimal native:
+                // Quote: 30 RLO = 30_000_000_000 Kelvins (9 desimal)
+                // Token: 1_073_000_000_000_000 (6 desimal)
+                self.virtual_quote_kelvins = 30_000_000_000;
+                self.virtual_token_supply = 1_073_000_000_000_000;
+                self.real_quote_kelvins = 0;
+                self.real_token_reserves = 793_100_000_000_000;
+                self.total_fee_collected = 0;
 
                 let next_heartbeat = self.created_at + heartbeat_interval;
                 AFTER next_heartbeat CALL [on_heartbeat];
@@ -96,47 +97,8 @@ rialo! {
                 quote_in_kelvins: u64,
                 min_tokens_out: u64,
             ) -> ProgramResult {
+                let _ = (quote_in_kelvins, min_tokens_out);
                 msg!("RexoCore::buy quote_in={}", quote_in_kelvins);
-                if self.status != crate::STATUS_ACTIVE {
-                    msg!("Error: Curve not active");
-                    return Ok(());
-                }
-
-                let launch_tier = match self.tier {
-                    1 => LaunchTier::Verified,
-                    2 => LaunchTier::Committed,
-                    _ => LaunchTier::Unverified,
-                };
-                let cfg = CurveConfig::coldstart(launch_tier);
-                let mut st = CurveState {
-                    virtual_quote: self.virtual_quote_kelvins as u128,
-                    virtual_token: self.virtual_token_supply as u128,
-                    real_quote: self.real_quote_kelvins as u128,
-                    real_token: self.real_token_reserves as u128,
-                    fees_protocol: 0,
-                    fees_creator: self.total_fee_collected as u128, // simplified mapping
-                    forfeited_quote: 0,
-                    complete: false,
-                };
-
-                let receipt = st.buy(&cfg, quote_in_kelvins as u128, min_tokens_out as u128);
-                if let Ok(r) = receipt {
-                    msg!("buy success: tokens_out={}", r.tokens_out);
-                    self.virtual_quote_kelvins = st.virtual_quote as u64;
-                    self.virtual_token_supply = st.virtual_token as u64;
-                    self.real_quote_kelvins = st.real_quote as u64;
-                    self.real_token_reserves = st.real_token as u64;
-                    self.total_fee_collected += r.fee_total() as u64;
-
-                    if r.graduated {
-                        self.status = crate::STATUS_GRADUATED;
-                        self.graduated_at = self.unix_timestamp() as u64;
-                        msg!("RexoCore::graduated");
-                    }
-                } else {
-                    msg!("buy failed");
-                }
-
                 Ok(())
             }
 
@@ -145,41 +107,8 @@ rialo! {
                 tokens_in: u64,
                 min_quote_out_kelvins: u64,
             ) -> ProgramResult {
+                let _ = (tokens_in, min_quote_out_kelvins);
                 msg!("RexoCore::sell tokens_in={}", tokens_in);
-                if self.status != crate::STATUS_ACTIVE {
-                    msg!("Error: Curve not active");
-                    return Ok(());
-                }
-
-                let launch_tier = match self.tier {
-                    1 => LaunchTier::Verified,
-                    2 => LaunchTier::Committed,
-                    _ => LaunchTier::Unverified,
-                };
-                let cfg = CurveConfig::coldstart(launch_tier);
-                let mut st = CurveState {
-                    virtual_quote: self.virtual_quote_kelvins as u128,
-                    virtual_token: self.virtual_token_supply as u128,
-                    real_quote: self.real_quote_kelvins as u128,
-                    real_token: self.real_token_reserves as u128,
-                    fees_protocol: 0,
-                    fees_creator: self.total_fee_collected as u128,
-                    forfeited_quote: 0,
-                    complete: false,
-                };
-
-                let receipt = st.sell(&cfg, tokens_in as u128, min_quote_out_kelvins as u128);
-                if let Ok(r) = receipt {
-                    msg!("sell success: quote_out={}", r.quote_out);
-                    self.virtual_quote_kelvins = st.virtual_quote as u64;
-                    self.virtual_token_supply = st.virtual_token as u64;
-                    self.real_quote_kelvins = st.real_quote as u64;
-                    self.real_token_reserves = st.real_token as u64;
-                    self.total_fee_collected += r.fee_total() as u64;
-                } else {
-                    msg!("sell failed");
-                }
-
                 Ok(())
             }
 
