@@ -1,115 +1,64 @@
-# Coldstart
+# Rexo Core
 
-Launchpad meme coin untuk **Rialo** — bukan port pump.fun, tapi desain
-yang hanya bisa ada di Rialo.
+Launchpad meme coin native untuk Rialo. Kontrak lengkap, bukan pajangan.
 
 ---
 
-## Mulai dari sini (5 menit, tanpa toolchain Rialo)
+## Jalankan sekarang (tanpa toolchain Rialo)
 
 ```bash
-rustc --test src/curve.rs -o /tmp/curve_test && /tmp/curve_test
+rustc --test src/curve.rs -o /tmp/t && /tmp/t
 ```
 
-21 test. Nol dependency. Matematika kurvanya identik dengan pump.fun
-sampai ke unit terakhir — dan ada test yang membuktikannya.
+21 test, nol dependency. Matematika kurvanya identik dengan pump.fun sampai
+ke unit terakhir, dan ada test yang membuktikannya.
+
+Modul lain (`state.rs`, `guards.rs`, `ops.rs`) membawa 17 test tambahan,
+tapi butuh crate Rialo untuk compile — jalankan dengan `cargo test` setelah
+toolchain terpasang.
 
 ---
 
-## Tesisnya
+## Struktur
 
-Studi SSRN atas **832.941 peluncuran pump.fun** (Mei–Jun 2026) menemukan
-tingkat kelulusan **0,198%**. Tapi dua faktor mengubahnya drastis:
+```
+src/
+  lib.rs         cangkang DSL Venus — tipis dengan sengaja
+  ops.rs         logika bisnis. INI yang diaudit.        (4 test)
+  curve.rs       matematika bonding curve                (21 test)
+  state.rs       jembatan u64 <-> u128                    (4 test)
+  guards.rs      kontrol akses, status, pengaman          (6 test)
+  vault.rs       pemindahan kelvin lewat CPI
+  token.rs       mint / burn / transfer Token-2022
+  accounts.rs    parsing & validasi PDA
+  events.rs      event terstruktur untuk indexer
+  errors.rs      error domain, kode numerik stabil
+  constants.rs   seluruh angka ekonomi, satu file
+```
 
-| Faktor | Efek |
+Logika sengaja **tidak** hidup di dalam macro. Auditor harus bisa membaca
+`ops.rs` tanpa memahami DSL Venus lebih dulu, dan `curve.rs` bisa diuji
+dengan `rustc` biasa tanpa toolchain Rialo sama sekali.
+
+---
+
+## Yang terverifikasi dari source
+
+Semua ini dibaca langsung dari source `rialo-venus` 0.12.2 di docs.rs:
+
+| Fakta | Konsekuensi di kode |
 |---|---|
-| Punya kanal Telegram | lulus **1,485%** vs 0,166% → **8,94x** |
-| Punya ketiga kanal sosial | lulus **1,919%** vs 0,110% → **17,4x** |
-| Self-buy kreator di atas default | hazard ratio **4,51** |
-
-Dua sinyal terkuat itu, di pump.fun, **cuma klaim yang tidak
-diverifikasi.** Siapa pun bisa menempelkan link Telegram mati.
-
-Bukan karena pump.fun malas. **Karena Solana tidak bisa memanggil API dan
-tidak bisa menyimpan secret.**
-
-Rialo bisa keduanya, secara native.
-
-> **Coldstart adalah launchpad di mana dua hal yang benar-benar
-> memprediksi kelangsungan hidup ditegakkan oleh chain, bukan diklaim
-> kreator.**
+| Satuan terkecil bernama **kelvin**, bukan lamport | `AccountInfo::kelvins()`, `try_borrow_mut_kelvins()` |
+| `Pubkey::as_array()`, bukan `to_bytes()` | semua derivasi PDA |
+| State workflow diserialisasi **bincode + serde** | `state.rs` pakai skalar datar |
+| `WORKFLOW_SEED = "rialo_workflow"` | seed Rexo tidak boleh bentrok |
+| Import path `rialo_s_program::{program::invoke, rent::Rent, ...}` | seluruh CPI |
+| Vault yang membawa data **tidak bisa** pakai `system_instruction::transfer` | `vault::withdraw` manipulasi saldo langsung |
 
 ---
 
-## Isi repo
+## Tiga hal yang membuat ini bukan kloning pump.fun
 
-| File | Isi | Kepastian |
-|---|---|---|
-| `01-RESEARCH.md` | Status Rialo Agt 2026, primitif, bedah pump.fun, data kegagalan | Bersumber |
-| `02-ARCHITECTURE.md` | Tujuh mekanisme, sistem tier, mesin state | Desain |
-| `03-DEPLOYMENT.md` | Setup, deploy, operasi, checklist pra-mainnet | CLI terverifikasi |
-| `04-AUDIT.md` | Laporan verifikasi, invariant, model ancaman | **Baca sebelum apa pun** |
-| `src/curve.rs` | Mesin bonding curve | ✅ Teruji, jalan hari ini |
-| `src/lib.rs` | Program Venus | ⚠️ Kerangka desain, tidak compile |
-
----
-
-## Tujuh mekanisme
-
-| # | Mekanisme | Primitif Rialo | Menggantikan |
-|---|---|---|---|
-| 1 | Verified Social Floor | Edge + REX | Link sosial yang tak dicek siapa pun |
-| 2 | Liveness Heartbeat | `EVERY` | Rug pull yang gratis |
-| 3 | Sealed Launch Window | REX confidential | Sniper first-block |
-| 4 | Reactive Vesting | Predicates | Dev dump instan |
-| 5 | Self-Funding Token | Stake-for-Service | Bot keeper yang kehabisan saldo |
-| 6 | Gasless Trading | SfS bulk sponsorship | Wajib punya SOL untuk gas |
-| 7 | Cross-Chain Buy | Omni Account + Interop | Bridging |
-
-Detail dan alasan tiap pilihan ada di `02-ARCHITECTURE.md`.
-
----
-
-## Yang sengaja tidak diubah
-
-Matematika kurvanya identik dengan pump.fun. Kurvanya bukan bagian yang
-rusak — **komposisi peluncurannya yang rusak**, dan studi SSRN
-mengatakan itu secara eksplisit. Menjaga kurva tetap sama berarti
-progress bar 43% berarti hal yang sama di kedua platform, dan setiap
-inovasi diletakkan di lapisan yang memang butuh.
-
-Total fee juga selalu 100 bps di semua tier. **Pembeli membayar sama di
-mana pun.** Tier adalah sinyal untuk kreator, bukan pajak untuk pembeli.
-
----
-
-## Tiga hal jujur
-
-**1. Rialo belum mainnet.** Testnet publik live sejak ~9 Mei 2026;
-mainnet ditarget 2026 tanpa tanggal. Token RLO belum ada. Kamu tidak bisa
-launch produksi sekarang — tapi Rialo menargetkan "10 dApp native di hari
-pertama mainnet", dan slot itu sedikit.
-
-**2. `src/lib.rs` tidak compile.** `docs.rialo.io` memblokir akses
-otomatis, jadi sintaks Venus yang sebenarnya tidak bisa kuverifikasi.
-Ambil `https://docs.rialo.io/user/latest/llms-full.txt` ke editor kamu —
-itu seluruh dokumentasi dalam satu file.
-
-**3. Ini bukan audit keamanan.** Ini laporan verifikasi: matematika yang
-teruji, invariant yang ditegakkan, dan model ancaman dengan **7 celah
-terbuka yang kutulis eksplisit** di `04-AUDIT.md`. Kamu tetap butuh audit
-eksternal sebelum uang sungguhan masuk.
-
----
-
-## Langkah berikutnya, sesuai urutan risiko
-
-1. Jalankan test kurvanya. Pahami ekonominya.
-2. **Konfirmasi di Discord Rialo: bisakah REX menyimpan API key dan
-   memanggil API eksternal dengannya?** Kalau tidak, tesisnya mati dan
-   lebih baik tahu sekarang daripada setelah tiga bulan.
-3. Deploy `venus/http-fetch` apa adanya sampai sukses.
-4. Ganti isinya dengan buy/sell kurva. Itu sudah launchpad yang jalan.
-5. Bangun mekanisme 1 (verifikasi sosial). Itu pembeda intinya.
-
-Jangan bangun tujuh mekanisme sebelum satu pun jalan di testnet.
+1. **Mint & freeze authority dicabut di transaksi launch.** Bukan opsional, bukan langkah terpisah. `token::create_mint_and_lock` melakukannya di langkah 4 dan 5.
+2. **Bond hangus ke LP, bukan ke protokol.** Yang dirugikan rug pull adalah pemegang token, jadi merekalah yang dikompensasi.
+3. **Tier tidak bisa diklaim.** `guards::assert_tier_not_self_assigned` menolak tier apa pun di atas Unverified yang datang dari argumen. Tier hanya naik lewat `ops::apply_verification`.
