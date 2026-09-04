@@ -39,4 +39,5 @@ rialo-s-program-error = { version = "0.12.2", features = ["borsh"] }
 rialo-venus = { version = "0.12.2" }
 rialo-venus-proc-macro = { version = "0.12.2" }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
