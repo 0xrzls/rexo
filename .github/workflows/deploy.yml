@@ -176,7 +176,7 @@ jobs:
             --program-path "${CONTRACT_DIR}" \
             --output-dir "${CONTRACT_DIR}/artifacts"; then
             echo "::error::rialo-build gagal! Menjalankan cargo build langsung untuk menampilkan pesan compiler lengkap:"
-            cargo build --manifest-path "${CONTRACT_DIR}/Cargo.toml" --target riscv64emac-solana-solana --verbose || true
+            cargo +rialo build --manifest-path "${CONTRACT_DIR}/Cargo.toml" --target riscv64emac-solana-solana --verbose || true
             exit 1
           fi
             
