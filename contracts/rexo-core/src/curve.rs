@@ -614,6 +614,71 @@ impl CurveState {
 }
 
 // ---------------------------------------------------------------------------
+// Operasi Bonding Curve Stateless (untuk ops.rs)
+// ---------------------------------------------------------------------------
+
+/// Hitung output pembelian token berdasarkan invariant constant product k = v_quote * v_token.
+/// Mengembalikan `(tokens_out, new_virtual_quote, new_virtual_token)`.
+pub fn calculate_buy(
+    quote_net: u128,
+    virtual_quote: u128,
+    virtual_token: u128,
+    real_token: u128,
+) -> Result<(u128, u128, u128), CurveError> {
+    if quote_net == 0 {
+        return Err(CurveError::ZeroAmount);
+    }
+    let k = virtual_quote
+        .checked_mul(virtual_token)
+        .ok_or(CurveError::Overflow)?;
+    let new_vq = virtual_quote
+        .checked_add(quote_net)
+        .ok_or(CurveError::Overflow)?;
+
+    let mut tokens_out = virtual_token
+        .checked_sub(ceil_div(k, new_vq)?)
+        .ok_or(CurveError::Overflow)?;
+
+    if tokens_out >= real_token {
+        tokens_out = real_token;
+    }
+
+    let new_vt = virtual_token
+        .checked_sub(tokens_out)
+        .ok_or(CurveError::Overflow)?;
+
+    Ok((tokens_out, new_vq, new_vt))
+}
+
+/// Hitung output quote kotor dari penjualan token berdasarkan invariant k.
+/// Mengembalikan `(quote_gross, new_virtual_quote, new_virtual_token)`.
+pub fn calculate_sell(
+    tokens_in: u128,
+    virtual_quote: u128,
+    virtual_token: u128,
+) -> Result<(u128, u128, u128), CurveError> {
+    if tokens_in == 0 {
+        return Err(CurveError::ZeroAmount);
+    }
+    let k = virtual_quote
+        .checked_mul(virtual_token)
+        .ok_or(CurveError::Overflow)?;
+    let new_vt = virtual_token
+        .checked_add(tokens_in)
+        .ok_or(CurveError::Overflow)?;
+
+    let gross_out = virtual_quote
+        .checked_sub(ceil_div(k, new_vt)?)
+        .ok_or(CurveError::Overflow)?;
+
+    let new_vq = virtual_quote
+        .checked_sub(gross_out)
+        .ok_or(CurveError::Overflow)?;
+
+    Ok((gross_out, new_vq, new_vt))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
