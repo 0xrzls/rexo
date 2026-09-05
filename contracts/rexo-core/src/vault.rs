@@ -12,10 +12,10 @@ use rialo_s_program::{
 use crate::errors::RexoError;
 
 /// Memindahkan kelvin dari akun pembayar (signer) ke vault
-pub fn deposit_kelvins<'a>(
-    from: &AccountInfo<'a>,
-    to_vault: &AccountInfo<'a>,
-    system_program: &AccountInfo<'a>,
+pub fn deposit_kelvins(
+    from: &AccountInfo<'_>,
+    to_vault: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
     amount: u64,
 ) -> Result<(), RexoError> {
     if amount == 0 {
@@ -32,9 +32,9 @@ pub fn deposit_kelvins<'a>(
 /// Menarik kelvin dari vault ke akun tujuan.
 /// Akun vault yang membawa state program tidak bisa memanggil `system_instruction::transfer`
 /// sehingga pemindahan saldo dilakukan via manipulasi saldo aman `try_borrow_mut_kelvins()`.
-pub fn withdraw_kelvins<'a>(
-    vault: &AccountInfo<'a>,
-    recipient: &AccountInfo<'a>,
+pub fn withdraw_kelvins(
+    vault: &AccountInfo<'_>,
+    recipient: &AccountInfo<'_>,
     amount: u64,
 ) -> Result<(), RexoError> {
     if amount == 0 {
