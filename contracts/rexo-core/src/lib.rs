@@ -15,11 +15,50 @@ pub mod token;
 pub mod vault;
 
 use rialo_venus_proc_macro::rialo;
-use rialo_s_program::pubkey::Pubkey;
 
 pub use constants::*;
 pub use errors::RexoError;
 pub use state::CurveState;
+
+macro_rules! to_curve_state {
+    ($self:expr) => {
+        $crate::state::CurveState {
+            creator: $self.creator,
+            mint: $self.mint,
+            vault: $self.vault,
+            tier: $self.tier,
+            status: $self.status,
+            heartbeat_interval: $self.heartbeat_interval,
+            heartbeat_count: $self.heartbeat_count,
+            last_heartbeat_at: $self.last_heartbeat_at,
+            created_at: $self.created_at,
+            graduated_at: $self.graduated_at,
+            virtual_quote_reserves: $self.virtual_quote_reserves,
+            virtual_token_reserves: $self.virtual_token_reserves,
+            real_quote_reserves: $self.real_quote_reserves,
+            real_token_reserves: $self.real_token_reserves,
+            fees_protocol_lifetime: $self.fees_protocol_lifetime,
+            fees_creator_lifetime: $self.fees_creator_lifetime,
+            bond_kelvins: $self.bond_kelvins,
+            bump_curve: 0,
+            bump_vault: 0,
+        }
+    };
+}
+
+macro_rules! sync_from_curve_state {
+    ($self:expr, $state:expr) => {{
+        let s = &$state;
+        $self.status = s.status;
+        $self.virtual_quote_reserves = s.virtual_quote_reserves;
+        $self.virtual_token_reserves = s.virtual_token_reserves;
+        $self.real_quote_reserves = s.real_quote_reserves;
+        $self.real_token_reserves = s.real_token_reserves;
+        $self.fees_protocol_lifetime = s.fees_protocol_lifetime;
+        $self.fees_creator_lifetime = s.fees_creator_lifetime;
+        $self.graduated_at = s.graduated_at;
+    }};
+}
 
 rialo! {
     workflow {
@@ -117,7 +156,7 @@ rialo! {
 
             handler fn on_heartbeat(&mut self) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
-                let mut curve_state = self.to_curve_state();
+                let mut curve_state = to_curve_state!(self);
 
                 crate::ops::on_heartbeat(&mut curve_state, now)
                     .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
@@ -142,7 +181,7 @@ rialo! {
                 let parsed = crate::accounts::TradeAccounts::parse(accounts)
                     .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
-                let mut curve_state = self.to_curve_state();
+                let mut curve_state = to_curve_state!(self);
 
                 crate::ops::buy(
                     &mut curve_state,
@@ -156,7 +195,7 @@ rialo! {
                     now,
                 ).map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
-                self.sync_from_curve_state(&curve_state);
+                sync_from_curve_state!(self, curve_state);
                 Ok(())
             }
 
@@ -170,7 +209,7 @@ rialo! {
                 let parsed = crate::accounts::TradeAccounts::parse(accounts)
                     .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
-                let mut curve_state = self.to_curve_state();
+                let mut curve_state = to_curve_state!(self);
 
                 crate::ops::sell(
                     &mut curve_state,
@@ -183,59 +222,24 @@ rialo! {
                     now,
                 ).map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
-                self.sync_from_curve_state(&curve_state);
+                sync_from_curve_state!(self, curve_state);
                 Ok(())
             }
 
             control fn graduate(&mut self) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
                 let accounts = self.accounts;
-                let vault_info = &accounts[0];
+                let vault_info = accounts
+                    .first()
+                    .ok_or(rialo_s_program::program_error::ProgramError::NotEnoughAccountKeys)?;
 
-                let mut curve_state = self.to_curve_state();
+                let mut curve_state = to_curve_state!(self);
                 crate::ops::graduate(&mut curve_state, vault_info, now)
                     .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
-                self.sync_from_curve_state(&curve_state);
+                sync_from_curve_state!(self, curve_state);
                 Ok(())
             }
         }
-    }
-}
-
-impl<'program, 'account_info> Program<'program, 'account_info> {
-    pub fn to_curve_state(&self) -> CurveState {
-        CurveState {
-            creator: self.creator,
-            mint: self.mint,
-            vault: self.vault,
-            tier: self.tier,
-            status: self.status,
-            heartbeat_interval: self.heartbeat_interval,
-            heartbeat_count: self.heartbeat_count,
-            last_heartbeat_at: self.last_heartbeat_at,
-            created_at: self.created_at,
-            graduated_at: self.graduated_at,
-            virtual_quote_reserves: self.virtual_quote_reserves,
-            virtual_token_reserves: self.virtual_token_reserves,
-            real_quote_reserves: self.real_quote_reserves,
-            real_token_reserves: self.real_token_reserves,
-            fees_protocol_lifetime: self.fees_protocol_lifetime,
-            fees_creator_lifetime: self.fees_creator_lifetime,
-            bond_kelvins: self.bond_kelvins,
-            bump_curve: 0,
-            bump_vault: 0,
-        }
-    }
-
-    pub fn sync_from_curve_state(&mut self, state: &CurveState) {
-        self.status = state.status;
-        self.virtual_quote_reserves = state.virtual_quote_reserves;
-        self.virtual_token_reserves = state.virtual_token_reserves;
-        self.real_quote_reserves = state.real_quote_reserves;
-        self.real_token_reserves = state.real_token_reserves;
-        self.fees_protocol_lifetime = state.fees_protocol_lifetime;
-        self.fees_creator_lifetime = state.fees_creator_lifetime;
-        self.graduated_at = state.graduated_at;
     }
 }
