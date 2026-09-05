@@ -31,17 +31,17 @@ pub fn assert_pda(
 
 /// Daftar akun untuk operasi Launch
 pub struct LaunchAccounts<'a> {
-    pub creator: &'a AccountInfo<'a>,
-    pub curve_state: &'a AccountInfo<'a>,
-    pub vault: &'a AccountInfo<'a>,
-    pub mint: &'a AccountInfo<'a>,
-    pub vault_token_account: &'a AccountInfo<'a>,
-    pub system_program: &'a AccountInfo<'a>,
-    pub token_program: &'a AccountInfo<'a>,
+    pub creator: &'a AccountInfo<'_>,
+    pub curve_state: &'a AccountInfo<'_>,
+    pub vault: &'a AccountInfo<'_>,
+    pub mint: &'a AccountInfo<'_>,
+    pub vault_token_account: &'a AccountInfo<'_>,
+    pub system_program: &'a AccountInfo<'_>,
+    pub token_program: &'a AccountInfo<'_>,
 }
 
 impl<'a> LaunchAccounts<'a> {
-    pub fn parse(accounts: &'a [AccountInfo<'a>]) -> Result<Self, RexoError> {
+    pub fn parse(accounts: &'a [AccountInfo<'_>]) -> Result<Self, RexoError> {
         if accounts.len() < 7 {
             return Err(RexoError::InvalidAccountData);
         }
@@ -59,19 +59,19 @@ impl<'a> LaunchAccounts<'a> {
 
 /// Daftar akun untuk operasi Buy / Sell
 pub struct TradeAccounts<'a> {
-    pub trader: &'a AccountInfo<'a>,
-    pub curve_state: &'a AccountInfo<'a>,
-    pub vault: &'a AccountInfo<'a>,
-    pub treasury: &'a AccountInfo<'a>,
-    pub creator: &'a AccountInfo<'a>,
-    pub trader_token_account: &'a AccountInfo<'a>,
-    pub vault_token_account: &'a AccountInfo<'a>,
-    pub system_program: &'a AccountInfo<'a>,
-    pub token_program: &'a AccountInfo<'a>,
+    pub trader: &'a AccountInfo<'_>,
+    pub curve_state: &'a AccountInfo<'_>,
+    pub vault: &'a AccountInfo<'_>,
+    pub treasury: &'a AccountInfo<'_>,
+    pub creator: &'a AccountInfo<'_>,
+    pub trader_token_account: &'a AccountInfo<'_>,
+    pub vault_token_account: &'a AccountInfo<'_>,
+    pub system_program: &'a AccountInfo<'_>,
+    pub token_program: &'a AccountInfo<'_>,
 }
 
 impl<'a> TradeAccounts<'a> {
-    pub fn parse(accounts: &'a [AccountInfo<'a>]) -> Result<Self, RexoError> {
+    pub fn parse(accounts: &'a [AccountInfo<'_>]) -> Result<Self, RexoError> {
         if accounts.len() < 9 {
             return Err(RexoError::InvalidAccountData);
         }
