@@ -14,11 +14,11 @@ use crate::state::CurveState;
 use crate::vault;
 
 /// Eksekusi Peluncuran Token
-pub fn launch<'a>(
+pub fn launch(
     state: &mut CurveState,
-    creator_info: &AccountInfo<'a>,
-    vault_info: &AccountInfo<'a>,
-    system_program: &AccountInfo<'a>,
+    creator_info: &AccountInfo<'_>,
+    vault_info: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
     mint_pubkey: Pubkey,
     requested_tier: u8,
     bond_kelvins: u64,
@@ -76,13 +76,13 @@ pub fn launch<'a>(
 }
 
 /// Eksekusi Pembelian Token (Buy)
-pub fn buy<'a>(
+pub fn buy(
     state: &mut CurveState,
-    trader_info: &AccountInfo<'a>,
-    vault_info: &AccountInfo<'a>,
-    treasury_info: &AccountInfo<'a>,
-    creator_info: &AccountInfo<'a>,
-    system_program: &AccountInfo<'a>,
+    trader_info: &AccountInfo<'_>,
+    vault_info: &AccountInfo<'_>,
+    treasury_info: &AccountInfo<'_>,
+    creator_info: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
     quote_in_kelvins: u64,
     min_tokens_out: u64,
     now: u64,
@@ -156,12 +156,12 @@ pub fn buy<'a>(
 }
 
 /// Eksekusi Penjualan Token (Sell)
-pub fn sell<'a>(
+pub fn sell(
     state: &mut CurveState,
-    trader_info: &AccountInfo<'a>,
-    vault_info: &AccountInfo<'a>,
-    treasury_info: &AccountInfo<'a>,
-    creator_info: &AccountInfo<'a>,
+    trader_info: &AccountInfo<'_>,
+    vault_info: &AccountInfo<'_>,
+    treasury_info: &AccountInfo<'_>,
+    creator_info: &AccountInfo<'_>,
     tokens_in: u64,
     min_quote_out_kelvins: u64,
     now: u64,
@@ -292,9 +292,9 @@ pub fn apply_verification(
 }
 
 /// Kelulusan ke DEX AMM Pool (Graduation)
-pub fn graduate<'a>(
+pub fn graduate(
     state: &mut CurveState,
-    _vault_info: &AccountInfo<'a>,
+    _vault_info: &AccountInfo<'_>,
     now: u64,
 ) -> Result<(), RexoError> {
     assert_graduated(state.status)?;
