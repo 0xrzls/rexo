@@ -15,6 +15,7 @@ pub mod token;
 pub mod vault;
 
 use rialo_venus_proc_macro::rialo;
+use rialo_s_program::pubkey::Pubkey;
 
 pub use constants::*;
 pub use errors::RexoError;
@@ -198,41 +199,43 @@ rialo! {
                 self.sync_from_curve_state(&curve_state);
                 Ok(())
             }
-
-            internal fn to_curve_state(&self) -> CurveState {
-                CurveState {
-                    creator: self.creator,
-                    mint: self.mint,
-                    vault: self.vault,
-                    tier: self.tier,
-                    status: self.status,
-                    heartbeat_interval: self.heartbeat_interval,
-                    heartbeat_count: self.heartbeat_count,
-                    last_heartbeat_at: self.last_heartbeat_at,
-                    created_at: self.created_at,
-                    graduated_at: self.graduated_at,
-                    virtual_quote_reserves: self.virtual_quote_reserves,
-                    virtual_token_reserves: self.virtual_token_reserves,
-                    real_quote_reserves: self.real_quote_reserves,
-                    real_token_reserves: self.real_token_reserves,
-                    fees_protocol_lifetime: self.fees_protocol_lifetime,
-                    fees_creator_lifetime: self.fees_creator_lifetime,
-                    bond_kelvins: self.bond_kelvins,
-                    bump_curve: 0,
-                    bump_vault: 0,
-                }
-            }
-
-            internal fn sync_from_curve_state(&mut self, state: &CurveState) {
-                self.status = state.status;
-                self.virtual_quote_reserves = state.virtual_quote_reserves;
-                self.virtual_token_reserves = state.virtual_token_reserves;
-                self.real_quote_reserves = state.real_quote_reserves;
-                self.real_token_reserves = state.real_token_reserves;
-                self.fees_protocol_lifetime = state.fees_protocol_lifetime;
-                self.fees_creator_lifetime = state.fees_creator_lifetime;
-                self.graduated_at = state.graduated_at;
-            }
         }
+    }
+}
+
+impl<'program, 'account_info> Program<'program, 'account_info> {
+    pub fn to_curve_state(&self) -> CurveState {
+        CurveState {
+            creator: self.creator,
+            mint: self.mint,
+            vault: self.vault,
+            tier: self.tier,
+            status: self.status,
+            heartbeat_interval: self.heartbeat_interval,
+            heartbeat_count: self.heartbeat_count,
+            last_heartbeat_at: self.last_heartbeat_at,
+            created_at: self.created_at,
+            graduated_at: self.graduated_at,
+            virtual_quote_reserves: self.virtual_quote_reserves,
+            virtual_token_reserves: self.virtual_token_reserves,
+            real_quote_reserves: self.real_quote_reserves,
+            real_token_reserves: self.real_token_reserves,
+            fees_protocol_lifetime: self.fees_protocol_lifetime,
+            fees_creator_lifetime: self.fees_creator_lifetime,
+            bond_kelvins: self.bond_kelvins,
+            bump_curve: 0,
+            bump_vault: 0,
+        }
+    }
+
+    pub fn sync_from_curve_state(&mut self, state: &CurveState) {
+        self.status = state.status;
+        self.virtual_quote_reserves = state.virtual_quote_reserves;
+        self.virtual_token_reserves = state.virtual_token_reserves;
+        self.real_quote_reserves = state.real_quote_reserves;
+        self.real_token_reserves = state.real_token_reserves;
+        self.fees_protocol_lifetime = state.fees_protocol_lifetime;
+        self.fees_creator_lifetime = state.fees_creator_lifetime;
+        self.graduated_at = state.graduated_at;
     }
 }
