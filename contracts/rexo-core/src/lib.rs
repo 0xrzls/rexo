@@ -60,7 +60,7 @@ rialo! {
                 let now = self.unix_timestamp() as u64;
 
                 // Akses akun yang dipass oleh runtime Venus (ditandai jelas):
-                let accounts = self.accounts();
+                let accounts = self.accounts;
                 let parsed = crate::accounts::LaunchAccounts::parse(accounts)
                     .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
@@ -137,7 +137,7 @@ rialo! {
                 min_tokens_out: u64,
             ) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
-                let accounts = self.accounts();
+                let accounts = self.accounts;
                 let parsed = crate::accounts::TradeAccounts::parse(accounts)
                     .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
@@ -165,7 +165,7 @@ rialo! {
                 min_quote_out_kelvins: u64,
             ) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
-                let accounts = self.accounts();
+                let accounts = self.accounts;
                 let parsed = crate::accounts::TradeAccounts::parse(accounts)
                     .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
 
@@ -188,7 +188,7 @@ rialo! {
 
             control fn graduate(&mut self) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
-                let accounts = self.accounts();
+                let accounts = self.accounts;
                 let vault_info = &accounts[0];
 
                 let mut curve_state = self.to_curve_state();
@@ -198,43 +198,41 @@ rialo! {
                 self.sync_from_curve_state(&curve_state);
                 Ok(())
             }
-        }
-    }
-}
 
-impl WorkflowState {
-    fn to_curve_state(&self) -> CurveState {
-        CurveState {
-            creator: self.creator,
-            mint: self.mint,
-            vault: self.vault,
-            tier: self.tier,
-            status: self.status,
-            heartbeat_interval: self.heartbeat_interval,
-            heartbeat_count: self.heartbeat_count,
-            last_heartbeat_at: self.last_heartbeat_at,
-            created_at: self.created_at,
-            graduated_at: self.graduated_at,
-            virtual_quote_reserves: self.virtual_quote_reserves,
-            virtual_token_reserves: self.virtual_token_reserves,
-            real_quote_reserves: self.real_quote_reserves,
-            real_token_reserves: self.real_token_reserves,
-            fees_protocol_lifetime: self.fees_protocol_lifetime,
-            fees_creator_lifetime: self.fees_creator_lifetime,
-            bond_kelvins: self.bond_kelvins,
-            bump_curve: 0,
-            bump_vault: 0,
-        }
-    }
+            internal fn to_curve_state(&self) -> CurveState {
+                CurveState {
+                    creator: self.creator,
+                    mint: self.mint,
+                    vault: self.vault,
+                    tier: self.tier,
+                    status: self.status,
+                    heartbeat_interval: self.heartbeat_interval,
+                    heartbeat_count: self.heartbeat_count,
+                    last_heartbeat_at: self.last_heartbeat_at,
+                    created_at: self.created_at,
+                    graduated_at: self.graduated_at,
+                    virtual_quote_reserves: self.virtual_quote_reserves,
+                    virtual_token_reserves: self.virtual_token_reserves,
+                    real_quote_reserves: self.real_quote_reserves,
+                    real_token_reserves: self.real_token_reserves,
+                    fees_protocol_lifetime: self.fees_protocol_lifetime,
+                    fees_creator_lifetime: self.fees_creator_lifetime,
+                    bond_kelvins: self.bond_kelvins,
+                    bump_curve: 0,
+                    bump_vault: 0,
+                }
+            }
 
-    fn sync_from_curve_state(&mut self, state: &CurveState) {
-        self.status = state.status;
-        self.virtual_quote_reserves = state.virtual_quote_reserves;
-        self.virtual_token_reserves = state.virtual_token_reserves;
-        self.real_quote_reserves = state.real_quote_reserves;
-        self.real_token_reserves = state.real_token_reserves;
-        self.fees_protocol_lifetime = state.fees_protocol_lifetime;
-        self.fees_creator_lifetime = state.fees_creator_lifetime;
-        self.graduated_at = state.graduated_at;
+            internal fn sync_from_curve_state(&mut self, state: &CurveState) {
+                self.status = state.status;
+                self.virtual_quote_reserves = state.virtual_quote_reserves;
+                self.virtual_token_reserves = state.virtual_token_reserves;
+                self.real_quote_reserves = state.real_quote_reserves;
+                self.real_token_reserves = state.real_token_reserves;
+                self.fees_protocol_lifetime = state.fees_protocol_lifetime;
+                self.fees_creator_lifetime = state.fees_creator_lifetime;
+                self.graduated_at = state.graduated_at;
+            }
+        }
     }
 }
