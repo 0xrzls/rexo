@@ -10,12 +10,12 @@ use crate::errors::RexoError;
 
 /// Inisialisasi mint, cetak 100% supply (1.000.000.000 * 10^6) ke vault,
 /// dan segera cabut (revoke) mint authority serta freeze authority secara permanen.
-pub fn create_mint_and_lock<'a>(
-    mint: &AccountInfo<'a>,
-    vault_token_account: &AccountInfo<'a>,
-    curve_pda: &AccountInfo<'a>,
-    payer: &AccountInfo<'a>,
-    token_program: &AccountInfo<'a>,
+pub fn create_mint_and_lock(
+    mint: &AccountInfo<'_>,
+    vault_token_account: &AccountInfo<'_>,
+    curve_pda: &AccountInfo<'_>,
+    payer: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
     seeds: &[&[u8]],
 ) -> Result<(), RexoError> {
     msg!("RexoToken::create_mint_and_lock: mint={} vault={}", mint.key, vault_token_account.key);
@@ -32,11 +32,11 @@ pub fn create_mint_and_lock<'a>(
 }
 
 /// Transfer token dari vault ke buyer (saat Buy)
-pub fn transfer_from_vault_to_buyer<'a>(
-    vault_token_account: &AccountInfo<'a>,
-    buyer_token_account: &AccountInfo<'a>,
-    curve_pda: &AccountInfo<'a>,
-    token_program: &AccountInfo<'a>,
+pub fn transfer_from_vault_to_buyer(
+    vault_token_account: &AccountInfo<'_>,
+    buyer_token_account: &AccountInfo<'_>,
+    curve_pda: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
     amount: u64,
     signer_seeds: &[&[&[u8]]],
 ) -> Result<(), RexoError> {
@@ -50,11 +50,11 @@ pub fn transfer_from_vault_to_buyer<'a>(
 }
 
 /// Transfer token dari seller ke vault (saat Sell)
-pub fn transfer_from_seller_to_vault<'a>(
-    seller_token_account: &AccountInfo<'a>,
-    vault_token_account: &AccountInfo<'a>,
-    seller_authority: &AccountInfo<'a>,
-    token_program: &AccountInfo<'a>,
+pub fn transfer_from_seller_to_vault(
+    seller_token_account: &AccountInfo<'_>,
+    vault_token_account: &AccountInfo<'_>,
+    seller_authority: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
     amount: u64,
 ) -> Result<(), RexoError> {
     if amount == 0 {
