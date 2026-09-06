@@ -30,7 +30,7 @@ pub fn assert_pda(
 }
 
 /// Daftar akun untuk operasi Launch
-pub struct LaunchAccounts<'a, 'info> {
+pub struct LaunchAccounts<'a, 'info: 'a> {
     pub creator: &'a AccountInfo<'info>,
     pub curve_state: &'a AccountInfo<'info>,
     pub vault: &'a AccountInfo<'info>,
@@ -40,7 +40,7 @@ pub struct LaunchAccounts<'a, 'info> {
     pub token_program: &'a AccountInfo<'info>,
 }
 
-impl<'a, 'info> LaunchAccounts<'a, 'info> {
+impl<'a, 'info: 'a> LaunchAccounts<'a, 'info> {
     pub fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, RexoError> {
         if accounts.len() < 7 {
             return Err(RexoError::InvalidAccountData);
@@ -58,7 +58,7 @@ impl<'a, 'info> LaunchAccounts<'a, 'info> {
 }
 
 /// Daftar akun untuk operasi Buy / Sell
-pub struct TradeAccounts<'a, 'info> {
+pub struct TradeAccounts<'a, 'info: 'a> {
     pub trader: &'a AccountInfo<'info>,
     pub curve_state: &'a AccountInfo<'info>,
     pub vault: &'a AccountInfo<'info>,
@@ -70,7 +70,7 @@ pub struct TradeAccounts<'a, 'info> {
     pub token_program: &'a AccountInfo<'info>,
 }
 
-impl<'a, 'info> TradeAccounts<'a, 'info> {
+impl<'a, 'info: 'a> TradeAccounts<'a, 'info> {
     pub fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, RexoError> {
         if accounts.len() < 9 {
             return Err(RexoError::InvalidAccountData);
