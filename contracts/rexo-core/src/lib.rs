@@ -325,7 +325,7 @@ rialo! {
             // ===============================================================
             // 4. SEALED BATCH
             // ===============================================================
-            control fn settle_sealed_batch(&mut self) -> ProgramResult {
+            handler fn settle_sealed_batch(&mut self) -> ProgramResult {
                 if self.status == crate::STATUS_SEALED {
                     if self.sealed_order_count == 0 {
                         self.status = crate::STATUS_ACTIVE;
@@ -347,7 +347,7 @@ rialo! {
                 Ok(())
             }
 
-            control fn distribute_fills(&mut self) -> ProgramResult {
+            handler fn distribute_fills(&mut self) -> ProgramResult {
                 if self.sealed_cursor < self.sealed_order_count {
                     // TODO(sealed): transfer isian untuk sealed_cursor
                     self.sealed_cursor += 1;
@@ -366,7 +366,7 @@ rialo! {
             // ===============================================================
             // 5. HEARTBEAT
             // ===============================================================
-            control fn heartbeat(&mut self) -> ProgramResult {
+            handler fn heartbeat(&mut self) -> ProgramResult {
                 let running = self.status == crate::STATUS_ACTIVE
                     || self.status == crate::STATUS_SEALED;
 
@@ -496,7 +496,7 @@ rialo! {
             // ===============================================================
             // 7. GRADUATION
             // ===============================================================
-            control fn graduate(&mut self) -> ProgramResult {
+            handler fn graduate(&mut self) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
                 let accs = self.accounts;
                 let acc = crate::accounts::GraduateAccounts::parse(self.program_id, accs)?;
