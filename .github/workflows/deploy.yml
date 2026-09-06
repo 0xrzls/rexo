@@ -159,6 +159,18 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-rialo-
 
       # -------------------------------------------------------------------
+      # 3.5 Patch zerocopy (stdarch_x86_avx512 pada nightly baru)
+      # -------------------------------------------------------------------
+      - name: Patch zerocopy (stdarch_x86_avx512 pada nightly baru)
+        working-directory: ${{ env.CONTRACT_DIR }}
+        run: |
+          echo "Menaikkan zerocopy ke versi yang compile di nightly saat ini..."
+          cargo update -p zerocopy --precise 0.7.35 \
+            || cargo update -p zerocopy \
+            || echo "::warning::zerocopy tidak bisa dinaikkan; build mungkin gagal"
+          cargo tree -i zerocopy || true
+
+      # -------------------------------------------------------------------
       # 4. Kompilasi Kontrak menggunakan rialo-build kanonik
       # -------------------------------------------------------------------
       - name: Compile Contract via rialo-build
