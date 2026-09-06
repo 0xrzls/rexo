@@ -10,7 +10,7 @@
 //!
 //! `lib.rs` di atas modul ini tipis — ia hanya menghubungkan DSL ke sini.
 
-use rialo_s_program::{account_info::AccountInfo, entrypoint::ProgramResult, msg, pubkey::Pubkey};
+use rialo_s_program::{msg, pubkey::Pubkey};
 
 use crate::accounts::{GraduateAccounts, LaunchAccounts, TradeAccounts};
 use crate::constants::*;
