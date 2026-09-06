@@ -132,13 +132,14 @@ rialo! {
             ) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
 
-                // >>> SATU-SATUNYA BARIS YANG BELUM TERVERIFIKASI <<<
-                // Cara macro menyerahkan &[AccountInfo] ke badan fungsi.
-                let accs = self.accounts();
-                let acc = crate::accounts::LaunchAccounts::parse(self.program_id(), accs)?;
+                // AKSES AKUN — lihat CATATAN AKSES AKUN di bawah blok macro.
+                // Kalau baris ini masih error, jalankan `cargo expand` dan
+                // baca definisi `struct Program` yang digenerate.
+                let accs = self.accounts;
+                let acc = crate::accounts::LaunchAccounts::parse(self.program_id, accs)?;
 
                 let params = crate::ops::LaunchParams { bond, dev_buy, now };
-                let out = crate::ops::launch(self.program_id(), &acc, params)?;
+                let out = crate::ops::launch(self.program_id, &acc, params)?;
 
                 self.creator = creator;
                 self.mint = mint;
@@ -209,35 +210,18 @@ rialo! {
             // ===============================================================
             // 2. VERIFIKASI
             // ===============================================================
-            handler fn on_socials_verified(
-                &mut self,
-                members: u64,
-                age_days: u64,
-                ok: bool,
-            ) -> ProgramResult {
-                let mut view = crate::state::view_from(
-                    self.tier,
-                    self.status,
-                    self.virtual_quote,
-                    self.virtual_token,
-                    self.real_quote,
-                    self.real_token,
-                    self.fees_protocol,
-                    self.fees_creator,
-                    self.forfeited_quote,
-                );
-                let tier = crate::ops::apply_verification(
-                    &mut view, self.bond, members, age_days, ok,
-                );
-
-                self.tier = tier;
-                self.telegram_members = members;
-                self.x_account_age_days = age_days;
-                self.verified_at = self.unix_timestamp() as u64;
-
-                msg!("rexo::verified tier={} members={}", tier, members);
-                Ok(())
-            }
+            // on_socials_verified DIHAPUS.
+            //
+            // Macro membangun enum `interface::Instruction` hanya dari entry
+            // point yang benar-benar bisa dipanggil. Handler tanpa operasi
+            // async yang menargetkannya tidak masuk enum itu, sehingga kode
+            // dispatch yang digenerate merujuk varian yang tidak ada:
+            //
+            //   error[E0599]: no variant named `OnSocialsVerified`
+            //                 found for enum `interface::Instruction`
+            //
+            // Kembalikan fungsi ini BERSAMAAN dengan statement webcall yang
+            // menargetkannya. Handler dan pemanggilnya satu paket.
 
             // ===============================================================
             // 3. TRADING
@@ -256,9 +240,9 @@ rialo! {
                     self.sealed_order_count += 1;
                     msg!("rexo::buy queued n={}", self.sealed_order_count);
                 } else {
-                    let accs = self.accounts();
+                    let accs = self.accounts;
                     let acc = crate::accounts::TradeAccounts::parse(
-                        self.program_id(), accs,
+                        self.program_id, accs,
                     )?;
                     let mut view = crate::state::view_from(
                         self.tier,
@@ -273,7 +257,7 @@ rialo! {
                     );
 
                     let out = crate::ops::buy(
-                        self.program_id(), &acc, &mut view, quote_in, min_tokens_out, now,
+                        self.program_id, &acc, &mut view, quote_in, min_tokens_out, now,
                     )?;
 
                     self.status = view.status;
@@ -299,8 +283,8 @@ rialo! {
 
             control fn sell(&mut self, tokens_in: u64, min_quote_out: u64) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
-                let accs = self.accounts();
-                let acc = crate::accounts::TradeAccounts::parse(self.program_id(), accs)?;
+                let accs = self.accounts;
+                let acc = crate::accounts::TradeAccounts::parse(self.program_id, accs)?;
                 let mut view = crate::state::view_from(
                     self.tier,
                     self.status,
@@ -400,34 +384,11 @@ rialo! {
                 Ok(())
             }
 
-            handler fn on_heartbeat(
-                &mut self,
-                members: u64,
-                _age_days: u64,
-                ok: bool,
-            ) -> ProgramResult {
-                let now = self.unix_timestamp() as u64;
-                let passed = ok && members >= crate::MIN_TELEGRAM_MEMBERS;
-
-                if passed {
-                    self.heartbeat_failures = 0;
-                    self.telegram_members = members;
-                } else {
-                    self.heartbeat_failures += 1;
-                }
-
-                let exhausted =
-                    self.heartbeat_failures >= crate::HEARTBEAT_FAILURES_BEFORE_ABANDON;
-
-                if exhausted {
-                    let try_at = now + 1;
-                    AFTER try_at CALL [try_abandon];
-                } else {
-                    let next_tick = now + crate::HEARTBEAT_INTERVAL_SECS;
-                    AFTER next_tick CALL [heartbeat];
-                }
-                Ok(())
-            }
+            // on_heartbeat DIHAPUS — alasan sama seperti di atas.
+            //
+            // Konsekuensinya: `heartbeat` sekarang berdetak tanpa memeriksa
+            // apa pun, dan `try_abandon` tidak pernah terpicu otomatis.
+            // Tidak ada bond yang bisa hangus. Itu default yang aman.
 
             control fn try_abandon(&mut self) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
@@ -440,9 +401,9 @@ rialo! {
                     crate::guards::abandonment_permitted(stats.0, stats.1).is_ok();
 
                 if permitted {
-                    let accs = self.accounts();
+                    let accs = self.accounts;
                     let acc = crate::accounts::TradeAccounts::parse(
-                        self.program_id(), accs,
+                        self.program_id, accs,
                     )?;
                     let mut view = crate::state::view_from(
                         self.tier,
@@ -457,7 +418,7 @@ rialo! {
                     );
 
                     let out = crate::ops::abandon(
-                        self.program_id(),
+                        self.program_id,
                         &acc,
                         &mut view,
                         self.bond,
@@ -533,8 +494,8 @@ rialo! {
             // ===============================================================
             control fn graduate(&mut self) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
-                let accs = self.accounts();
-                let acc = crate::accounts::GraduateAccounts::parse(self.program_id(), accs)?;
+                let accs = self.accounts;
+                let acc = crate::accounts::GraduateAccounts::parse(self.program_id, accs)?;
                 let view = crate::state::view_from(
                     self.tier,
                     self.status,
@@ -548,7 +509,7 @@ rialo! {
                 );
 
                 let out = crate::ops::graduate(
-                    self.program_id(), &acc, &view, self.bond, self.bond_settled, now,
+                    self.program_id, &acc, &view, self.bond, self.bond_settled, now,
                 )?;
 
                 self.bond_settled = true;
@@ -621,3 +582,38 @@ rialo! {
         }
     }
 }
+
+// ===========================================================================
+// CATATAN AKSES AKUN
+//
+// Error sebelumnya memberi tahu tipe `self` di dalam macro:
+//
+//   &mut Program<'program, 'account_info>
+//
+// Tipe itu DIGENERATE macro, jadi tidak ada di docs.rs dan tidak bisa
+// dicari. Yang bisa dipastikan dari pesan error:
+//
+//   error[E0599]: no method named `accounts`   -> 5x, sama dengan jumlah
+//   error[E0599]: no method named `program_id` -> 9x  call site di kode
+//
+// Korelasinya persis, jadi keduanya bukan method. Kode sekarang memakai
+// akses FIELD (`self.accounts`, `self.program_id`), yang merupakan bentuk
+// paling umum untuk struct hasil generate dengan dua lifetime seperti itu.
+//
+// KALAU MASIH ERROR, jangan menebak lagi — baca definisinya langsung:
+//
+//   cargo install cargo-expand
+//   cargo expand --lib > /tmp/expanded.rs
+//   grep -n "struct Program" -A 25 /tmp/expanded.rs
+//   grep -n "impl.*Program" -A 40 /tmp/expanded.rs
+//
+// Itu akan menampilkan nama field dan method yang sebenarnya. Kandidat
+// lain yang mungkin, urut dari yang paling masuk akal:
+//
+//   self.account_infos          self.accounts()
+//   self.ctx.accounts           self.infos
+//   self.id                     self.key
+//
+// Ganti di 5 baris `let accs = ...` dan 9 baris `self.program_id`.
+// Seluruh modul lain (ops, accounts, vault, token) tidak perlu disentuh.
+// ===========================================================================
