@@ -318,10 +318,10 @@ pub fn graduate(
 }
 
 /// Pembatalan / Abandonment jika terjadi rug pull / dev tidak hadir
-pub fn abandon<'a>(
+pub fn abandon(
     state: &mut CurveState,
-    vault_info: &AccountInfo<'a>,
-    lp_reserve_info: &AccountInfo<'a>,
+    vault_info: &AccountInfo<'_>,
+    lp_reserve_info: &AccountInfo<'_>,
     reason: u8,
     failed_heartbeats: u64,
     global_failures: u64,
