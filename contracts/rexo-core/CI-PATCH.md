@@ -59,7 +59,33 @@ Sisipkan step ini di `.github/workflows/deploy.yml` **sebelum** step build
 
 ---
 
-## Perbaikan C — kalau A dan B gagal
+## KALAU KAMU SUDAH MENCOBA A ATAU B DAN DAPAT INI
+
+```
+error: failed to select a version for the requirement `zerocopy = "^0.8.23"`
+```
+
+**Batalkan dulu.** `cargo update -p zerocopy` tanpa `--precise` melompat ke
+jalur 0.8.x, yang tidak kompatibel dengan dependency lain di pohonmu. Itu
+saranku yang salah — maaf.
+
+```bash
+# 1. buang perubahan resolusi yang gagal
+git checkout Cargo.lock 2>/dev/null || rm -f Cargo.lock
+
+# 2. pastikan TIDAK ADA entri zerocopy di Cargo.toml
+grep -n zerocopy Cargo.toml   # harus kosong; kalau ada, hapus barisnya
+
+# 3. tetap di jalur 0.7.x
+cargo update -p zerocopy --precise 0.7.35
+```
+
+Kalau `0.7.35` juga ditolak, jangan lanjut mengutak-atik dependency.
+Akar masalahnya bukan di situ — lompat ke Perbaikan C.
+
+---
+
+## Perbaikan C — pin nightly (INI YANG SEBENARNYA BENAR)
 
 Berarti nightly yang dipakai toolchain Rialo terlalu baru untuk seluruh
 pohon dependency. Pin nightly-nya:
@@ -74,6 +100,30 @@ components = ["rustfmt", "clippy"]
 Pilih tanggal yang dekat dengan rilis `rialo-venus` 0.12.2 (30 Juni 2026).
 Toolchain Rialo `0.0.3` kemungkinan besar dibangun terhadap nightly sekitar
 tanggal itu.
+
+Kenapa ini yang benar: `stdarch_x86_avx512` menjadi unstable pada rilis
+nightly TERTENTU. Semua crate lama yang memakainya akan gagal di nightly
+yang lebih baru dari itu, bukan cuma `zerocopy`. Menaikkan satu crate hanya
+memindahkan masalah ke crate berikutnya. Menurunkan nightly menyelesaikan
+seluruh kelasnya sekaligus.
+
+Kalau CI memakai `rialoman`, cek apakah ia memasang nightly-nya sendiri:
+
+```bash
+rustc --version          # di dalam step CI, sebelum build
+rustup toolchain list
+```
+
+Kalau `rialoman` memaksa nightly terbaru, `rust-toolchain.toml` mungkin
+diabaikan. Dalam kasus itu, pasang toolchain eksplisit di workflow:
+
+```yaml
+      - name: Pin nightly
+        run: |
+          rustup toolchain install nightly-2026-06-30 --profile minimal
+          rustup default nightly-2026-06-30
+          rustc --version
+```
 
 ---
 
