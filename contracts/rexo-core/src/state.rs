@@ -182,3 +182,35 @@ mod tests {
         assert_eq!(tier_from_u8(255), LaunchTier::Unverified);
     }
 }
+
+/// Bangun `LaunchView` dari field skalar.
+///
+/// Sengaja fungsi bebas dengan parameter posisional, bukan method di atas
+/// tipe state hasil macro. Alasannya: badan fungsi di dalam `rialo! { }`
+/// hanya boleh memakai konstruksi yang terbukti diterima parser DSL —
+/// `let`, penugasan field, `if`, pemanggilan fungsi, dan `msg!`. Menaruh
+/// `impl` atau method biasa di dalam blok `program { }` belum terverifikasi.
+#[allow(clippy::too_many_arguments)]
+pub fn view_from(
+    tier: u8,
+    status: u8,
+    virtual_quote: u64,
+    virtual_token: u64,
+    real_quote: u64,
+    real_token: u64,
+    fees_protocol: u64,
+    fees_creator: u64,
+    forfeited_quote: u64,
+) -> LaunchView {
+    LaunchView {
+        tier,
+        status,
+        virtual_quote,
+        virtual_token,
+        real_quote,
+        real_token,
+        fees_protocol,
+        fees_creator,
+        forfeited_quote,
+    }
+}
