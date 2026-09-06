@@ -30,18 +30,18 @@ pub fn assert_pda(
 }
 
 /// Daftar akun untuk operasi Launch
-pub struct LaunchAccounts<'a> {
-    pub creator: &'a AccountInfo<'_>,
-    pub curve_state: &'a AccountInfo<'_>,
-    pub vault: &'a AccountInfo<'_>,
-    pub mint: &'a AccountInfo<'_>,
-    pub vault_token_account: &'a AccountInfo<'_>,
-    pub system_program: &'a AccountInfo<'_>,
-    pub token_program: &'a AccountInfo<'_>,
+pub struct LaunchAccounts<'a, 'info> {
+    pub creator: &'a AccountInfo<'info>,
+    pub curve_state: &'a AccountInfo<'info>,
+    pub vault: &'a AccountInfo<'info>,
+    pub mint: &'a AccountInfo<'info>,
+    pub vault_token_account: &'a AccountInfo<'info>,
+    pub system_program: &'a AccountInfo<'info>,
+    pub token_program: &'a AccountInfo<'info>,
 }
 
-impl<'a> LaunchAccounts<'a> {
-    pub fn parse(accounts: &'a [AccountInfo<'_>]) -> Result<Self, RexoError> {
+impl<'a, 'info> LaunchAccounts<'a, 'info> {
+    pub fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, RexoError> {
         if accounts.len() < 7 {
             return Err(RexoError::InvalidAccountData);
         }
@@ -58,20 +58,20 @@ impl<'a> LaunchAccounts<'a> {
 }
 
 /// Daftar akun untuk operasi Buy / Sell
-pub struct TradeAccounts<'a> {
-    pub trader: &'a AccountInfo<'_>,
-    pub curve_state: &'a AccountInfo<'_>,
-    pub vault: &'a AccountInfo<'_>,
-    pub treasury: &'a AccountInfo<'_>,
-    pub creator: &'a AccountInfo<'_>,
-    pub trader_token_account: &'a AccountInfo<'_>,
-    pub vault_token_account: &'a AccountInfo<'_>,
-    pub system_program: &'a AccountInfo<'_>,
-    pub token_program: &'a AccountInfo<'_>,
+pub struct TradeAccounts<'a, 'info> {
+    pub trader: &'a AccountInfo<'info>,
+    pub curve_state: &'a AccountInfo<'info>,
+    pub vault: &'a AccountInfo<'info>,
+    pub treasury: &'a AccountInfo<'info>,
+    pub creator: &'a AccountInfo<'info>,
+    pub trader_token_account: &'a AccountInfo<'info>,
+    pub vault_token_account: &'a AccountInfo<'info>,
+    pub system_program: &'a AccountInfo<'info>,
+    pub token_program: &'a AccountInfo<'info>,
 }
 
-impl<'a> TradeAccounts<'a> {
-    pub fn parse(accounts: &'a [AccountInfo<'_>]) -> Result<Self, RexoError> {
+impl<'a, 'info> TradeAccounts<'a, 'info> {
+    pub fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, RexoError> {
         if accounts.len() < 9 {
             return Err(RexoError::InvalidAccountData);
         }
