@@ -20,6 +20,7 @@ pub use constants::*;
 pub use errors::RexoError;
 pub use state::CurveState;
 
+#[allow(unused_macros)]
 macro_rules! to_curve_state {
     ($self:expr) => {
         $crate::state::CurveState {
@@ -46,6 +47,7 @@ macro_rules! to_curve_state {
     };
 }
 
+#[allow(unused_macros)]
 macro_rules! sync_from_curve_state {
     ($self:expr, $state:expr) => {{
         let s = &$state;
@@ -99,15 +101,19 @@ rialo! {
             ) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
 
-                // Akses akun yang dipass oleh runtime Venus (ditandai jelas):
+                // Akses akun yang dipass oleh runtime Venus:
                 let accounts = self.accounts;
-                let parsed = crate::accounts::LaunchAccounts::parse(accounts)
-                    .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
+                if accounts.len() < 7 {
+                    return Err(rialo_s_program::program_error::ProgramError::NotEnoughAccountKeys);
+                }
+                let creator_info = &accounts[0];
+                let vault_info = &accounts[2];
+                let system_program_info = &accounts[5];
 
                 let mut curve_state = crate::state::CurveState::new(
                     creator,
                     mint,
-                    *parsed.vault.key,
+                    *vault_info.key,
                     tier,
                     bond_kelvins,
                     heartbeat_interval,
@@ -118,9 +124,9 @@ rialo! {
 
                 crate::ops::launch(
                     &mut curve_state,
-                    parsed.creator,
-                    parsed.vault,
-                    parsed.system_program,
+                    creator_info,
+                    vault_info,
+                    system_program_info,
                     mint,
                     tier,
                     bond_kelvins,
@@ -178,18 +184,24 @@ rialo! {
             ) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
                 let accounts = self.accounts;
-                let parsed = crate::accounts::TradeAccounts::parse(accounts)
-                    .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
+                if accounts.len() < 9 {
+                    return Err(rialo_s_program::program_error::ProgramError::NotEnoughAccountKeys);
+                }
+                let trader = &accounts[0];
+                let vault = &accounts[2];
+                let treasury = &accounts[3];
+                let creator = &accounts[4];
+                let system_program = &accounts[7];
 
                 let mut curve_state = to_curve_state!(self);
 
                 crate::ops::buy(
                     &mut curve_state,
-                    parsed.trader,
-                    parsed.vault,
-                    parsed.treasury,
-                    parsed.creator,
-                    parsed.system_program,
+                    trader,
+                    vault,
+                    treasury,
+                    creator,
+                    system_program,
                     quote_in_kelvins,
                     min_tokens_out,
                     now,
@@ -206,17 +218,22 @@ rialo! {
             ) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
                 let accounts = self.accounts;
-                let parsed = crate::accounts::TradeAccounts::parse(accounts)
-                    .map_err(|e| rialo_s_program::program_error::ProgramError::Custom(e as u32))?;
+                if accounts.len() < 9 {
+                    return Err(rialo_s_program::program_error::ProgramError::NotEnoughAccountKeys);
+                }
+                let trader = &accounts[0];
+                let vault = &accounts[2];
+                let treasury = &accounts[3];
+                let creator = &accounts[4];
 
                 let mut curve_state = to_curve_state!(self);
 
                 crate::ops::sell(
                     &mut curve_state,
-                    parsed.trader,
-                    parsed.vault,
-                    parsed.treasury,
-                    parsed.creator,
+                    trader,
+                    vault,
+                    treasury,
+                    creator,
                     tokens_in,
                     min_quote_out_kelvins,
                     now,
