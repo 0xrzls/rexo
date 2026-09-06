@@ -133,6 +133,78 @@ Keduanya ditandai `TODO(rex)` dan `TODO(sealed)` di kode.
 
 ---
 
+## Kegagalan 3 — error tipe (setelah macro berhasil parse)
+
+Kalau kamu sampai di sini, **macro sudah parse**. Itu kemajuan besar:
+error yang muncul sekarang error tipe biasa, bukan error DSL.
+
+### Yang sudah diperbaiki
+
+| Error | Jumlah | Sebab | Perbaikan |
+|---|---|---|---|
+| `no method named 'accounts'` | 5 | ditulis sebagai method | jadi field `self.accounts` |
+| `no method named 'program_id'` | 9 | ditulis sebagai method | jadi field `self.program_id` |
+| `no variant named 'OnHeartbeat'` | 1 | handler yatim | handler dihapus |
+| `no variant named 'OnSocialsVerified'` | 1 | handler yatim | handler dihapus |
+
+Jumlah error cocok **persis** dengan jumlah call site di kode — 5 dan 9.
+Itu yang memastikan diagnosisnya benar, bukan tebakan.
+
+Soal handler yatim: macro membangun enum `interface::Instruction` hanya
+dari entry point yang benar-benar bisa dipanggil. Handler yang tidak
+ditargetkan operasi async apa pun tidak masuk enum itu, tapi kode dispatch
+yang digenerate tetap merujuknya. Handler dan pemanggilnya satu paket —
+kembalikan keduanya bersamaan.
+
+### Yang BELUM bisa kupastikan: `error[E0061]`
+
+```
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+```
+
+Muncul 5 kali. Aku sudah mencocokkan setiap pemanggilan fungsi di `lib.rs`
+terhadap signature-nya dan **semuanya cocok**. Jadi aku tidak tahu fungsi
+mana yang dimaksud.
+
+Penyebabnya, log yang kamu tempel hanya memuat **baris pertama** tiap
+error. Yang menentukan justru baris berikutnya:
+
+```
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+  --> src/lib.rs:141:27          <-- ini yang kubutuhkan
+   |
+141 |   let out = crate::ops::launch(...)
+   |             ^^^^^^^^^^^^^^^^^^ ...
+note: function defined here
+  --> src/ops.rs:58:8            <-- dan ini
+```
+
+Kirim output lengkapnya:
+
+```bash
+cargo build --lib 2>&1 | head -120
+```
+
+Hipotesis terkuatku sementara: `AFTER x CALL [f];` mengekspansi jadi
+pemanggilan yang aritasnya bergantung pada versi DSL. Kalau benar, ini
+alasan tambahan untuk mencoba naik ke 0.20.0-alpha.0.
+
+### Kalau `self.accounts` masih salah
+
+Jangan menebak lagi. Baca definisi yang digenerate:
+
+```bash
+cargo install cargo-expand
+cargo expand --lib > /tmp/expanded.rs
+grep -n "struct Program" -A 25 /tmp/expanded.rs
+grep -n "impl.*Program" -A 40 /tmp/expanded.rs
+```
+
+Itu menampilkan nama field dan method sebenarnya. Ganti di 5 baris
+`let accs = ...` dan 9 baris `self.program_id`. Modul lain tidak tersentuh.
+
+---
+
 ## Kemungkinan akar masalah yang lebih dalam: versi
 
 Devnet kamu melaporkan `api_version: 0.20.0-alpha.0`. Kontrak ini pin
