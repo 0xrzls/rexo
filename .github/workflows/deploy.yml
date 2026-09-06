@@ -164,9 +164,10 @@ jobs:
       - name: Patch zerocopy (stdarch_x86_avx512 pada nightly baru)
         working-directory: ${{ env.CONTRACT_DIR }}
         run: |
-          echo "Menaikkan zerocopy ke versi yang compile di nightly saat ini (0.7.35)..."
-          cargo update -p zerocopy --precise 0.7.35 \
-            || echo "::warning::zerocopy 0.7.35 tidak bisa dipin; periksa apakah Cargo.lock sudah terpasang"
+          echo "Memastikan zerocopy kompatibel dengan toolchain..."
+          cargo update -p zerocopy --precise 0.7.35 2>/dev/null \
+            || cargo update -p zerocopy \
+            || true
           cargo tree -i zerocopy || true
 
       # -------------------------------------------------------------------
