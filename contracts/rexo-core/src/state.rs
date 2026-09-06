@@ -1,151 +1,139 @@
-//! # Rexo Core — State Storage & Jembatan u64 <-> u128
-//!
-//! Serialisasi skalar datar kompatibel bincode + serde untuk runtime Venus.
+// Copyright (c) 2026 Rexo
+// SPDX-License-Identifier: Apache-2.0
 
-use rialo_s_program::pubkey::Pubkey;
-use serde::{Deserialize, Serialize};
+//! Jembatan antara state workflow Venus (skalar datar, u64) dan tipe kaya
+//! di `curve.rs` (u128).
+//!
+//! # Kenapa dua representasi
+//!
+//! State workflow diserialisasi dengan bincode+serde (terkonfirmasi dari
+//! source `rialo-venus::write_to_storage`). Field skalar adalah bentuk
+//! paling aman dan paling stabil layout-nya.
+//!
+//! Tapi matematika kurva WAJIB u128:
+//!
+//! ```text
+//! k = virtual_quote * virtual_token
+//!   = 30_000_000_000 * 1_073_000_000_000_000
+//!   = 32_190_000_000_000_000_000_000_000
+//! u64::MAX =    18_446_744_073_709_551_615
+//! ```
+//!
+//! `k` 1.745.023x lebih besar dari kapasitas u64. Hitung kurva pakai u64
+//! dan ia overflow di perkalian pertama, sebelum satu trade pun terjadi.
+//!
+//! Menyimpan state tetap u64 aman karena tiap field terbatas:
+//!
+//! | field           | maksimum          | muat u64 |
+//! |-----------------|-------------------|----------|
+//! | virtual_quote   |     115.005.359.057 | ya     |
+//! | virtual_token   | 1.073.000.000.000.000 | ya   |
+//! | real_quote      |      85.005.359.057 | ya     |
+//! | real_token      |   793.100.000.000.000 | ya   |
+//!
+//! Yang tidak muat hanya hasil antara `k`, dan itu tidak pernah disimpan.
 
 use crate::constants::*;
+use crate::curve::{CurveConfig, CurveState, LaunchTier};
 use crate::errors::RexoError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CurveState {
-    pub creator: Pubkey,
-    pub mint: Pubkey,
-    pub vault: Pubkey,
-    pub tier: u8,
-    pub status: u8,
-    pub heartbeat_interval: u64,
-    pub heartbeat_count: u64,
-    pub last_heartbeat_at: u64,
-    pub created_at: u64,
-    pub graduated_at: u64,
-    pub virtual_quote_reserves: u64,
-    pub virtual_token_reserves: u64,
-    pub real_quote_reserves: u64,
-    pub real_token_reserves: u64,
-    pub fees_protocol_lifetime: u64,
-    pub fees_creator_lifetime: u64,
-    pub bond_kelvins: u64,
-    pub bump_curve: u8,
-    pub bump_vault: u8,
+/// Konversi u128 -> u64 yang menolak diam-diam kehilangan data.
+///
+/// Jangan pakai `as u64`. Kalau invariant kita pernah bocor, `as` akan
+/// membungkus nilainya tanpa suara dan merusak akuntansi tanpa jejak.
+#[inline]
+pub fn narrow(v: u128) -> Result<u64, RexoError> {
+    u64::try_from(v).map_err(|_| RexoError::MathOverflow)
 }
 
-impl CurveState {
-    pub fn new(
-        creator: Pubkey,
-        mint: Pubkey,
-        vault: Pubkey,
-        tier: u8,
-        bond_kelvins: u64,
-        heartbeat_interval: u64,
-        now: u64,
-        bump_curve: u8,
-        bump_vault: u8,
-    ) -> Self {
+/// Pandangan bertipe atas state peluncuran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchView {
+    pub tier: u8,
+    pub status: u8,
+    pub virtual_quote: u64,
+    pub virtual_token: u64,
+    pub real_quote: u64,
+    pub real_token: u64,
+    pub fees_protocol: u64,
+    pub fees_creator: u64,
+    pub forfeited_quote: u64,
+}
+
+impl LaunchView {
+    /// Konfigurasi kurva untuk tier ini.
+    ///
+    /// `virtual_quote` / `virtual_token` di sini adalah nilai GENESIS, bukan
+    /// state hidup. `curve.rs` hanya memakai keduanya di `new()` dan
+    /// `validate()` — `buy`/`sell` memakai state, bukan config. Memasukkan
+    /// nilai hidup ke sini akan membuat `validate()` gagal begitu kurva
+    /// terkuras (virtual_token turun di bawah curve_supply).
+    pub fn config(&self) -> CurveConfig {
+        CurveConfig {
+            virtual_quote: INITIAL_VIRTUAL_QUOTE as u128,
+            virtual_token: INITIAL_VIRTUAL_TOKEN as u128,
+            curve_supply: INITIAL_REAL_TOKEN as u128,
+            lp_reserve: LP_RESERVE as u128,
+            tier: tier_from_u8(self.tier),
+        }
+    }
+
+    pub fn curve(&self) -> CurveState {
+        CurveState {
+            virtual_quote: self.virtual_quote as u128,
+            virtual_token: self.virtual_token as u128,
+            real_quote: self.real_quote as u128,
+            real_token: self.real_token as u128,
+            fees_protocol: self.fees_protocol as u128,
+            fees_creator: self.fees_creator as u128,
+            forfeited_quote: self.forfeited_quote as u128,
+            complete: self.status == STATUS_GRADUATED
+                || self.status == STATUS_FINALIZED,
+        }
+    }
+
+    /// Tulis balik hasil operasi kurva. Mengembalikan Err kalau ada nilai
+    /// yang tidak muat u64 — itu berarti invariant bocor dan kita HARUS
+    /// membatalkan transaksi, bukan memotong nilainya.
+    pub fn apply(&mut self, st: &CurveState) -> Result<(), RexoError> {
+        self.virtual_quote = narrow(st.virtual_quote)?;
+        self.virtual_token = narrow(st.virtual_token)?;
+        self.real_quote = narrow(st.real_quote)?;
+        self.real_token = narrow(st.real_token)?;
+        self.fees_protocol = narrow(st.fees_protocol)?;
+        self.fees_creator = narrow(st.fees_creator)?;
+        self.forfeited_quote = narrow(st.forfeited_quote)?;
+        Ok(())
+    }
+
+    pub fn genesis(tier: u8) -> Self {
         Self {
-            creator,
-            mint,
-            vault,
             tier,
-            status: STATUS_ACTIVE,
-            heartbeat_interval,
-            heartbeat_count: 0,
-            last_heartbeat_at: now,
-            created_at: now,
-            graduated_at: 0,
-            virtual_quote_reserves: INITIAL_VIRTUAL_QUOTE_RESERVES as u64,
-            virtual_token_reserves: INITIAL_VIRTUAL_TOKEN_RESERVES as u64,
-            real_quote_reserves: 0,
-            real_token_reserves: INITIAL_REAL_TOKEN_RESERVES as u64,
-            fees_protocol_lifetime: 0,
-            fees_creator_lifetime: 0,
-            bond_kelvins,
-            bump_curve,
-            bump_vault,
+            status: STATUS_SEALED,
+            virtual_quote: INITIAL_VIRTUAL_QUOTE,
+            virtual_token: INITIAL_VIRTUAL_TOKEN,
+            real_quote: 0,
+            real_token: INITIAL_REAL_TOKEN,
+            fees_protocol: 0,
+            fees_creator: 0,
+            forfeited_quote: 0,
         }
     }
+}
 
-    /// Progress persentase kelulusan (0..10000 bps)
-    pub fn progress_bps(&self) -> u64 {
-        let sold = INITIAL_REAL_TOKEN_RESERVES.saturating_sub(self.real_token_reserves as u128);
-        ((sold * 10_000) / INITIAL_REAL_TOKEN_RESERVES) as u64
+pub fn tier_from_u8(t: u8) -> LaunchTier {
+    match t {
+        TIER_COMMITTED => LaunchTier::Committed,
+        TIER_VERIFIED => LaunchTier::Verified,
+        _ => LaunchTier::Unverified,
     }
+}
 
-    /// Update state setelah pembelian
-    pub fn apply_buy(
-        &mut self,
-        quote_net: u64,
-        tokens_out: u64,
-        fee_proto: u64,
-        fee_creator: u64,
-    ) -> Result<(), RexoError> {
-        self.virtual_quote_reserves = self
-            .virtual_quote_reserves
-            .checked_add(quote_net)
-            .ok_or(RexoError::Overflow)?;
-        self.real_quote_reserves = self
-            .real_quote_reserves
-            .checked_add(quote_net)
-            .ok_or(RexoError::Overflow)?;
-
-        self.virtual_token_reserves = self
-            .virtual_token_reserves
-            .checked_sub(tokens_out)
-            .ok_or(RexoError::InsufficientLiquidity)?;
-        self.real_token_reserves = self
-            .real_token_reserves
-            .checked_sub(tokens_out)
-            .ok_or(RexoError::InsufficientLiquidity)?;
-
-        self.fees_protocol_lifetime = self
-            .fees_protocol_lifetime
-            .saturating_add(fee_proto);
-        self.fees_creator_lifetime = self
-            .fees_creator_lifetime
-            .saturating_add(fee_creator);
-
-        if self.real_token_reserves == 0 {
-            self.status = STATUS_GRADUATED;
-        }
-
-        Ok(())
-    }
-
-    /// Update state setelah penjualan
-    pub fn apply_sell(
-        &mut self,
-        tokens_in: u64,
-        quote_gross: u64,
-        fee_proto: u64,
-        fee_creator: u64,
-    ) -> Result<(), RexoError> {
-        self.virtual_token_reserves = self
-            .virtual_token_reserves
-            .checked_add(tokens_in)
-            .ok_or(RexoError::Overflow)?;
-        self.real_token_reserves = self
-            .real_token_reserves
-            .checked_add(tokens_in)
-            .ok_or(RexoError::Overflow)?;
-
-        self.virtual_quote_reserves = self
-            .virtual_quote_reserves
-            .checked_sub(quote_gross)
-            .ok_or(RexoError::InsufficientLiquidity)?;
-        self.real_quote_reserves = self
-            .real_quote_reserves
-            .checked_sub(quote_gross)
-            .ok_or(RexoError::InsufficientLiquidity)?;
-
-        self.fees_protocol_lifetime = self
-            .fees_protocol_lifetime
-            .saturating_add(fee_proto);
-        self.fees_creator_lifetime = self
-            .fees_creator_lifetime
-            .saturating_add(fee_creator);
-
-        Ok(())
+pub fn tier_to_u8(t: LaunchTier) -> u8 {
+    match t {
+        LaunchTier::Committed => TIER_COMMITTED,
+        LaunchTier::Verified => TIER_VERIFIED,
+        LaunchTier::Unverified => TIER_UNVERIFIED,
     }
 }
 
@@ -154,65 +142,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_initial_state_and_progress() {
-        let dummy_pubkey = Pubkey::default();
-        let state = CurveState::new(
-            dummy_pubkey,
-            dummy_pubkey,
-            dummy_pubkey,
-            TIER_UNVERIFIED,
-            0,
-            300,
-            1000,
-            255,
-            254,
-        );
-
-        assert_eq!(state.status, STATUS_ACTIVE);
-        assert_eq!(state.progress_bps(), 0);
-        assert_eq!(state.real_quote_reserves, 0);
-        assert_eq!(state.real_token_reserves as u128, INITIAL_REAL_TOKEN_RESERVES);
+    fn narrow_rejects_overflow_instead_of_truncating() {
+        assert_eq!(narrow(u64::MAX as u128).unwrap(), u64::MAX);
+        assert_eq!(narrow(u64::MAX as u128 + 1), Err(RexoError::MathOverflow));
+        // k tidak akan pernah muat — inilah alasan modul ini ada
+        let k = INITIAL_VIRTUAL_QUOTE as u128 * INITIAL_VIRTUAL_TOKEN as u128;
+        assert_eq!(narrow(k), Err(RexoError::MathOverflow));
     }
 
     #[test]
-    fn test_apply_buy_updates_reserves() {
-        let dummy = Pubkey::default();
-        let mut state = CurveState::new(dummy, dummy, dummy, TIER_COMMUNITY, 500_000_000, 300, 1000, 255, 254);
-        
-        let buy_quote = 1_000_000_000; // 1 RLO
-        let tokens_out = 30_000_000_000;
-        state.apply_buy(buy_quote, tokens_out, 5_000_000, 5_000_000).unwrap();
-
-        assert_eq!(state.real_quote_reserves, 1_000_000_000);
-        assert_eq!(state.real_token_reserves, (INITIAL_REAL_TOKEN_RESERVES as u64) - tokens_out);
-        assert_eq!(state.fees_protocol_lifetime, 5_000_000);
-        assert_eq!(state.fees_creator_lifetime, 5_000_000);
-        assert!(state.progress_bps() > 0);
+    fn genesis_round_trips_through_curve() {
+        let v = LaunchView::genesis(TIER_COMMITTED);
+        let cfg = v.config();
+        let st = v.curve();
+        assert_eq!(st.real_token, INITIAL_REAL_TOKEN as u128);
+        assert_eq!(st.progress_bps(&cfg), 0);
+        assert!(!st.complete);
     }
 
     #[test]
-    fn test_apply_sell_decreases_quote_reserves() {
-        let dummy = Pubkey::default();
-        let mut state = CurveState::new(dummy, dummy, dummy, TIER_COMMUNITY, 500_000_000, 300, 1000, 255, 254);
-        
-        state.apply_buy(2_000_000_000, 50_000_000_000, 10_000_000, 10_000_000).unwrap();
-        let prev_tokens = state.real_token_reserves;
-        
-        // Sell back 10_000_000_000 tokens for 350_000_000 quote
-        state.apply_sell(10_000_000_000, 350_000_000, 1_750_000, 1_750_000).unwrap();
-        assert_eq!(state.real_token_reserves, prev_tokens + 10_000_000_000);
-        assert_eq!(state.real_quote_reserves, 1_650_000_000);
+    fn full_buy_cycle_stays_within_u64() {
+        let mut v = LaunchView::genesis(TIER_COMMITTED);
+        let cfg = v.config();
+        let mut st = v.curve();
+        // beli sampai lulus; setiap langkah harus tetap muat u64
+        st.buy(&cfg, 200 * ONE_RLO as u128, 0).unwrap();
+        v.apply(&st).expect("nilai harus tetap muat u64");
+        assert_eq!(v.real_token, 0);
+        assert_eq!(v.real_quote, 85_005_359_057);
     }
 
     #[test]
-    fn test_graduation_triggers_at_zero_tokens() {
-        let dummy = Pubkey::default();
-        let mut state = CurveState::new(dummy, dummy, dummy, TIER_COMMUNITY, 500_000_000, 300, 1000, 255, 254);
-        
-        let all_tokens = state.real_token_reserves;
-        state.apply_buy(85_000_000_000, all_tokens, 400_000_000, 400_000_000).unwrap();
-        assert_eq!(state.real_token_reserves, 0);
-        assert_eq!(state.status, STATUS_GRADUATED);
-        assert_eq!(state.progress_bps(), 10_000);
+    fn tier_mapping_is_total_and_defaults_safe() {
+        assert_eq!(tier_from_u8(0), LaunchTier::Unverified);
+        assert_eq!(tier_from_u8(1), LaunchTier::Verified);
+        assert_eq!(tier_from_u8(2), LaunchTier::Committed);
+        // nilai tak dikenal jatuh ke tier PALING KETAT, bukan paling longgar
+        assert_eq!(tier_from_u8(99), LaunchTier::Unverified);
+        assert_eq!(tier_from_u8(255), LaunchTier::Unverified);
     }
 }
