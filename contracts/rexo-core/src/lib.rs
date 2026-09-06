@@ -203,7 +203,8 @@ rialo! {
                 // AMAN: tier paling ketat, kreator tidak dapat bagi fee.
                 // ---------------------------------------------------------
 
-                msg!("rexo::launched sealed_until={} beat={}", settle_at, first_beat);
+                msg!("rexo::launched sealed_until={}", settle_at);
+                msg!("rexo::launched next_beat={}", first_beat);
                 Ok(())
             }
 
@@ -379,7 +380,8 @@ rialo! {
                     let next_tick = now + crate::HEARTBEAT_INTERVAL_SECS;
                     AFTER next_tick CALL [heartbeat];
 
-                    msg!("rexo::beat n={} next={}", self.heartbeat_count, next_tick);
+                    msg!("rexo::beat n={}", self.heartbeat_count);
+                    msg!("rexo::beat next={}", next_tick);
                 }
                 Ok(())
             }
@@ -440,7 +442,8 @@ rialo! {
                     self.exit_pool = out.exit_pool;
                     self.exit_base = out.exit_base;
 
-                    msg!("rexo::abandoned pool={} base={}", out.exit_pool, out.exit_base);
+                    msg!("rexo::abandoned pool={}", out.exit_pool);
+                    msg!("rexo::abandoned base={}", out.exit_base);
                 } else {
                     // Kegagalan sistemik: ini masalah kita, bukan mereka.
                     self.heartbeat_failures = 0;
@@ -483,7 +486,8 @@ rialo! {
                         self.creator_tranches_unlocked += 1;
                         let amount = self.creator_tokens_locked / 3;
                         // TODO(vesting): transfer `amount` ke kreator
-                        msg!("rexo::vest t={} amt={}", self.creator_tranches_unlocked, amount);
+                        msg!("rexo::vest t={}", self.creator_tranches_unlocked);
+                        msg!("rexo::vest amt={}", amount);
                     }
                 }
                 Ok(())
@@ -522,7 +526,8 @@ rialo! {
                 // langkah tambahan.
                 // TODO(sfs): buat posisi Stake-for-Service dari treasury.
 
-                msg!("rexo::graduated lp_q={} sfs={}", out.lp_quote, out.sfs_endowment);
+                msg!("rexo::graduated lp_q={}", out.lp_quote);
+                msg!("rexo::graduated sfs={}", out.sfs_endowment);
                 Ok(())
             }
 
@@ -547,16 +552,17 @@ rialo! {
                 let price = st.price_per_token().unwrap_or(0) as u64;
                 let mcap = st.market_cap(&cfg).unwrap_or(0) as u64;
 
-                msg!(
-                    "rexo::state status={} tier={} progress={}bps price={} mcap={}",
-                    self.status, self.tier, progress, price, mcap
-                );
-                msg!(
-                    "rexo::res vq={} vt={} rq={} rt={} pool={} base={}",
-                    self.virtual_quote, self.virtual_token,
-                    self.real_quote, self.real_token,
-                    self.exit_pool, self.exit_base
-                );
+                msg!("rexo::state status={}", self.status);
+                msg!("rexo::state tier={}", self.tier);
+                msg!("rexo::state progress_bps={}", progress);
+                msg!("rexo::state price={}", price);
+                msg!("rexo::state mcap={}", mcap);
+                msg!("rexo::res vq={}", self.virtual_quote);
+                msg!("rexo::res vt={}", self.virtual_token);
+                msg!("rexo::res rq={}", self.real_quote);
+                msg!("rexo::res rt={}", self.real_token);
+                msg!("rexo::res exit_pool={}", self.exit_pool);
+                msg!("rexo::res exit_base={}", self.exit_base);
                 Ok(())
             }
 
