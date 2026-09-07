@@ -342,6 +342,7 @@ rialo! {
                         self.status = crate::STATUS_ACTIVE;
                         self.sealed_until = 0;
                         msg!("rexo::sealed fallback n={}", self.sealed_order_count);
+                        AFTER 1 seconds CALL [distribute_fills];
                     }
                 }
                 Ok(())
