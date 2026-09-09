@@ -1,0 +1,114 @@
+{
+  "name": "rexo-core",
+  "version": "0.12.2",
+  "description": "Canonical Meme Coin Launchpad Engine for Rialo Venus",
+  "programId": "FZcEyNcWaWUt9njVp6eJYmJnArMcVSQtMevsVJYZLg89",
+  "target": "riscv32emc-unknown-none-polkavm",
+  "instructions": [
+    {
+      "name": "launch",
+      "discriminant": 0,
+      "accounts": [
+        { "name": "payer", "isSigner": true, "isWritable": true },
+        { "name": "workflow", "isSigner": false, "isWritable": true },
+        { "name": "mint", "isSigner": true, "isWritable": true },
+        { "name": "mint_authority", "isSigner": false, "isWritable": false },
+        { "name": "curve_token_account", "isSigner": false, "isWritable": true },
+        { "name": "vault", "isSigner": false, "isWritable": true },
+        { "name": "treasury", "isSigner": false, "isWritable": true },
+        { "name": "creator_vault", "isSigner": false, "isWritable": true },
+        { "name": "token_program", "isSigner": false, "isWritable": false },
+        { "name": "system_program", "isSigner": false, "isWritable": false }
+      ],
+      "args": [
+        { "name": "creator", "type": "pubkey" },
+        { "name": "mint", "type": "pubkey" },
+        { "name": "treasury", "type": "pubkey" },
+        { "name": "name", "type": "string" },
+        { "name": "symbol", "type": "string" },
+        { "name": "metadata_uri", "type": "string" },
+        { "name": "telegram_handle", "type": "string" },
+        { "name": "x_handle", "type": "string" },
+        { "name": "bond", "type": "u64" },
+        { "name": "dev_buy", "type": "u64" }
+      ]
+    },
+    {
+      "name": "buy",
+      "discriminant": 1,
+      "accounts": [
+        { "name": "trader", "isSigner": true, "isWritable": true },
+        { "name": "workflow", "isSigner": false, "isWritable": true },
+        { "name": "mint", "isSigner": false, "isWritable": false },
+        { "name": "mint_authority", "isSigner": false, "isWritable": false },
+        { "name": "curve_token_account", "isSigner": false, "isWritable": true },
+        { "name": "trader_token_account", "isSigner": false, "isWritable": true },
+        { "name": "vault", "isSigner": false, "isWritable": true },
+        { "name": "treasury", "isSigner": false, "isWritable": true },
+        { "name": "creator_vault", "isSigner": false, "isWritable": true },
+        { "name": "token_program", "isSigner": false, "isWritable": false },
+        { "name": "system_program", "isSigner": false, "isWritable": false }
+      ],
+      "args": [
+        { "name": "quote_in", "type": "u64" },
+        { "name": "min_tokens_out", "type": "u64" }
+      ]
+    },
+    {
+      "name": "sell",
+      "discriminant": 2,
+      "accounts": [
+        { "name": "trader", "isSigner": true, "isWritable": true },
+        { "name": "workflow", "isSigner": false, "isWritable": true },
+        { "name": "mint", "isSigner": false, "isWritable": false },
+        { "name": "mint_authority", "isSigner": false, "isWritable": false },
+        { "name": "curve_token_account", "isSigner": false, "isWritable": true },
+        { "name": "trader_token_account", "isSigner": false, "isWritable": true },
+        { "name": "vault", "isSigner": false, "isWritable": true },
+        { "name": "treasury", "isSigner": false, "isWritable": true },
+        { "name": "creator_vault", "isSigner": false, "isWritable": true },
+        { "name": "token_program", "isSigner": false, "isWritable": false },
+        { "name": "system_program", "isSigner": false, "isWritable": false }
+      ],
+      "args": [
+        { "name": "tokens_in", "type": "u64" },
+        { "name": "min_quote_out", "type": "u64" }
+      ]
+    },
+    {
+      "name": "graduate",
+      "discriminant": 3,
+      "accounts": [
+        { "name": "payer", "isSigner": true, "isWritable": true },
+        { "name": "workflow", "isSigner": false, "isWritable": true },
+        { "name": "mint", "isSigner": false, "isWritable": true },
+        { "name": "mint_authority", "isSigner": false, "isWritable": false },
+        { "name": "curve_token_account", "isSigner": false, "isWritable": true },
+        { "name": "vault", "isSigner": false, "isWritable": true },
+        { "name": "pool_token_account", "isSigner": false, "isWritable": true },
+        { "name": "pool_quote_account", "isSigner": false, "isWritable": true },
+        { "name": "creator", "isSigner": false, "isWritable": true },
+        { "name": "token_program", "isSigner": false, "isWritable": false },
+        { "name": "system_program", "isSigner": false, "isWritable": false }
+      ],
+      "args": []
+    },
+    {
+      "name": "on_heartbeat",
+      "discriminant": 4,
+      "accounts": [
+        { "name": "workflow", "isSigner": false, "isWritable": true }
+      ],
+      "args": []
+    },
+    {
+      "name": "settle_sealed_batch",
+      "discriminant": 5,
+      "accounts": [
+        { "name": "workflow", "isSigner": false, "isWritable": true },
+        { "name": "vault", "isSigner": false, "isWritable": true }
+      ],
+      "args": []
+    }
+  ]
+}
