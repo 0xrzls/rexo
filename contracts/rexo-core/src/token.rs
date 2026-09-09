@@ -33,6 +33,9 @@ use rialo_spl_token_2022 as token;
 /// Ukuran akun mint Token-2022 tanpa extension.
 const MINT_SIZE: usize = 82;
 
+/// Ukuran akun token Token-2022 tanpa extension (Lubang 7.1).
+const TOKEN_ACCOUNT_SIZE: usize = 165;
+
 pub fn derive_mint_authority(program_id: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[MINT_AUTHORITY_SEED, mint.as_array()], program_id)
 }
@@ -90,6 +93,31 @@ pub fn create_mint_and_lock<'a>(
             TOKEN_DECIMALS,
         )?,
         &[mint.clone(), token_program.clone()],
+    )?;
+
+    // 2b. Buat & inisialisasi akun token kurva (curve_token_account) untuk mint_authority.
+    // TAMBALAN LUBANG 7.1: Program bertanggung jawab membuat dan memverifikasi akun ini.
+    // Tanpa langkah ini, `mint_to` ke akun yang belum dialokasikan akan gagal 100%.
+    if curve_token_account.kelvins() == 0 {
+        invoke(
+            &system_instruction::create_account(
+                payer.key,
+                curve_token_account.key,
+                rent.minimum_balance(TOKEN_ACCOUNT_SIZE),
+                TOKEN_ACCOUNT_SIZE as u64,
+                token_program.key,
+            ),
+            &[payer.clone(), curve_token_account.clone(), system_program_account.clone()],
+        )?;
+    }
+    invoke(
+        &token::instruction::initialize_account3(
+            token_program.key,
+            curve_token_account.key,
+            mint.key,
+            mint_authority.key,
+        )?,
+        &[curve_token_account.clone(), mint.clone(), token_program.clone()],
     )?;
 
     // 3. cetak SELURUH supply ke akun token kurva
