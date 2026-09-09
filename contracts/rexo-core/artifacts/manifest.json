@@ -1,0 +1,117 @@
+{
+  "name": "rexo-core",
+  "version": "0.12.2",
+  "description": "Canonical Meme Coin Launchpad Engine for Rialo Venus",
+  "target": "riscv32emc-unknown-none-polkavm",
+  "programId": "FZcEyNcWaWUt9njVp6eJYmJnArMcVSQtMevsVJYZLg89",
+  "loader": "RiscVLoader11111111111111111111111111111111",
+  "network": "rialo-devnet",
+  "sha256": "00d2b5fcb8b6102b3dc140cda2f3aeb30cb4929d7df3e07722a607ecc8846f56",
+  "modules": [
+    "lib.rs",
+    "curve.rs",
+    "token.rs",
+    "vault.rs",
+    "accounts.rs",
+    "hooks.rs",
+    "state.rs",
+    "guards.rs",
+    "constants.rs",
+    "ops.rs",
+    "events.rs",
+    "errors.rs"
+  ],
+  "invariants": {
+    "virtualQuoteKelvins": 30000000000,
+    "virtualTokenSupply": 1073000000000000,
+    "curveTokenSupply": 793100000000000,
+    "graduationTokenReserve": 206900000000000,
+    "graduationTargetKelvins": 85000000000,
+    "feeProtocolBasisPoints": 50,
+    "feeCreatorBasisPoints": 50
+  },
+  "exportedFunctions": [
+    "launch",
+    "buy",
+    "sell",
+    "on_heartbeat",
+    "apply_verification",
+    "settle_sealed_batch",
+    "distribute_fills",
+    "graduate",
+    "abandon"
+  ],
+  "instructions": [
+    {
+      "name": "launch",
+      "discriminant": 0,
+      "accounts": [
+        "payer",
+        "workflow",
+        "mint",
+        "mint_authority",
+        "curve_token_account",
+        "vault",
+        "treasury",
+        "creator_vault",
+        "token_program",
+        "system_program"
+      ],
+      "args": ["creator", "mint", "treasury", "name", "symbol", "metadata_uri", "telegram_handle", "x_handle", "bond", "dev_buy"]
+    },
+    {
+      "name": "buy",
+      "discriminant": 1,
+      "accounts": [
+        "trader",
+        "workflow",
+        "mint",
+        "mint_authority",
+        "curve_token_account",
+        "trader_token_account",
+        "vault",
+        "treasury",
+        "creator_vault",
+        "token_program",
+        "system_program"
+      ],
+      "args": ["quote_in", "min_tokens_out"]
+    },
+    {
+      "name": "sell",
+      "discriminant": 2,
+      "accounts": [
+        "trader",
+        "workflow",
+        "mint",
+        "mint_authority",
+        "curve_token_account",
+        "trader_token_account",
+        "vault",
+        "treasury",
+        "creator_vault",
+        "token_program",
+        "system_program"
+      ],
+      "args": ["tokens_in", "min_quote_out"]
+    },
+    {
+      "name": "graduate",
+      "discriminant": 3,
+      "accounts": [
+        "payer",
+        "workflow",
+        "mint",
+        "mint_authority",
+        "curve_token_account",
+        "vault",
+        "pool_token_account",
+        "pool_quote_account",
+        "creator",
+        "token_program",
+        "system_program"
+      ],
+      "args": []
+    }
+  ]
+}
