@@ -24,12 +24,35 @@ use rialo_s_program::{
     system_program, sysvar::Sysvar,
 };
 
-use crate::constants::VAULT_SEED;
+use crate::constants::{CREATOR_VAULT_SEED, VAULT_SEED};
 use crate::errors::RexoError;
 
 /// Turunkan alamat vault untuk sebuah mint.
 pub fn derive_vault(program_id: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[VAULT_SEED, mint.as_array()], program_id)
+}
+
+/// Turunkan alamat creator_vault untuk seorang kreator (Lubang 7.2).
+pub fn derive_creator_vault(program_id: &Pubkey, creator: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[CREATOR_VAULT_SEED, creator.as_array()], program_id)
+}
+
+/// Pastikan akun creator_vault yang dikirim benar-benar PDA yang kita harapkan.
+pub fn assert_creator_vault(
+    program_id: &Pubkey,
+    creator: &Pubkey,
+    creator_vault: &AccountInfo<'_>,
+) -> Result<u8, ProgramError> {
+    let (expected, bump) = derive_creator_vault(program_id, creator);
+    if expected != *creator_vault.key {
+        msg!(
+            "creator_vault mismatch: got {} expected {}",
+            creator_vault.key,
+            expected
+        );
+        return Err(RexoError::InvalidVault.into());
+    }
+    Ok(bump)
 }
 
 /// Pastikan akun vault yang dikirim benar-benar PDA yang kita harapkan.
@@ -96,6 +119,53 @@ pub fn ensure_vault<'a>(
         &[seeds],
     )?;
     msg!("vault {} created with {} kelvin rent", vault.key, lamports);
+    Ok(())
+}
+
+/// Buat creator_vault kalau belum ada. Idempoten (Tambalan Lubang 7.2).
+///
+/// Tanpa akun ini, penarikan fee kreator via manipulasi saldo langsung
+/// akan menghasilkan akun kosong tanpa alokasi yang rawan disapu jaringan.
+pub fn ensure_creator_vault<'a>(
+    program_id: &Pubkey,
+    creator: &Pubkey,
+    payer: &AccountInfo<'a>,
+    creator_vault: &AccountInfo<'a>,
+    system_program_account: &AccountInfo<'a>,
+) -> ProgramResult {
+    if !system_program::check_id(system_program_account.key) {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+    let (expected, bump) = derive_creator_vault(program_id, creator);
+    if expected != *creator_vault.key {
+        return Err(RexoError::InvalidVault.into());
+    }
+    if creator_vault.kelvins() > 0 {
+        return Ok(()); // sudah ada
+    }
+
+    let space: usize = 1;
+    let rent = Rent::get()?;
+    let lamports = rent.minimum_balance(space);
+
+    let seeds: &[&[u8]] = &[CREATOR_VAULT_SEED, creator.as_array(), &[bump]];
+    rialo_s_program::program::invoke_signed(
+        &system_instruction::create_account(
+            payer.key,
+            creator_vault.key,
+            lamports,
+            space as u64,
+            program_id,
+        ),
+        &[payer.clone(), creator_vault.clone(), system_program_account.clone()],
+        &[seeds],
+    )?;
+    msg!(
+        "creator_vault {} created with {} kelvin rent for creator {}",
+        creator_vault.key,
+        lamports,
+        creator
+    );
     Ok(())
 }
 
