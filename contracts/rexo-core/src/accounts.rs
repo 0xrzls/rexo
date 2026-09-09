@@ -81,6 +81,10 @@ impl<'a, 'info> LaunchAccounts<'a, 'info> {
         if expected_vault != *self.vault.key {
             return Err(RexoError::InvalidVault.into());
         }
+        let (expected_creator_vault, _) = vault::derive_creator_vault(program_id, self.payer.key);
+        if expected_creator_vault != *self.creator_vault.key {
+            return Err(RexoError::InvalidVault.into());
+        }
         Ok(())
     }
 }
