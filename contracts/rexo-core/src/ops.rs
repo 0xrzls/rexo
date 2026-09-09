@@ -56,6 +56,15 @@ pub fn launch(
         acc.system_program,
     )?;
 
+    // 1b. Creator vault harus dibuat idempoten agar penarikan fee kreator tidak gagal (Lubang 7.2 ditambal).
+    vault::ensure_creator_vault(
+        program_id,
+        acc.payer.key,
+        acc.payer,
+        acc.creator_vault,
+        acc.system_program,
+    )?;
+
     // 2. Mint + cetak seluruh supply + CABUT authority. Satu transaksi.
     token::create_mint_and_lock(
         program_id,
