@@ -1,105 +1,84 @@
-package rexo:core@0.2.0;
+package rexo:core@0.12.2;
 
-/// Rexo Core v2 — Config-Driven Meme Launchpad Engine for Rialo Venus
+/// Rexo Core — Canonical Meme Launchpad Engine for Rialo Venus
 world rexo-launchpad {
     /// Account Public Key (32-byte Ed25519)
     type pubkey = list<u8>;
 
-    /// Pool Lifecycle Status: 0 = Funding, 1 = Migrating, 2 = Migrated
-    enum lifecycle-status {
-        funding,
-        migrating,
-        migrated,
+    /// Launchpad Tier: 0 = Degan (Unverified), 1 = Community (Verified Socials), 2 = Committed (Skin-in-the-game Bond)
+    enum tier-type {
+        degan,
+        community,
+        committed,
     }
 
-    /// Launch Record State Struct
-    record launch-state {
-        partner: pubkey,
+    /// Pool Lifecycle Status: 0 = Active, 1 = SealedBatch, 2 = Graduated, 3 = Abandoned, 4 = Cancelled
+    enum pool-status {
+        active,
+        sealed-batch,
+        graduated,
+        abandoned,
+        cancelled,
+    }
+
+    /// Pool State Struct
+    record pool-state {
         creator: pubkey,
         mint: pubkey,
-        protocol-treasury: pubkey,
+        treasury: pubkey,
         name: string,
         symbol: string,
         metadata-uri: string,
-        lifecycle: u8,
-        cfg-virtual-quote: u64,
-        cfg-virtual-token: u64,
-        cfg-total-base-sell: u64,
-        cfg-lp-reserve: u64,
-        fee-total-bps: u64,
-        fee-protocol-bps: u64,
-        fee-partner-bps: u64,
-        fee-creator-bps: u64,
-        fee-referral-bps: u64,
-        vest-bps: u64,
-        vest-cliff-secs: u64,
-        vest-duration-secs: u64,
+        tier: u8,
+        status: u8,
+        created-at: u64,
         virtual-quote: u64,
         virtual-token: u64,
         real-quote: u64,
         real-token: u64,
-        ledger-protocol: u64,
-        ledger-partner: u64,
-        ledger-creator: u64,
-        ledger-referral-paid: u64,
-        creator-allocation: u64,
-        creator-claimed: u64,
-        migrate-target: u8,
-        created-at: u64,
-        migrated-at: u64,
+        fees-protocol: u64,
+        fees-creator: u64,
+        bond: u64,
+        heartbeat-count: u64,
+        heartbeat-failures: u32,
     }
 
-    /// Initialize instruction: Launch new token from LaunchConfig
-    export initialize: func(
-        partner: pubkey,
-        creator: pubkey,
-        mint: pubkey,
-        protocol-treasury: pubkey,
+    /// Launch instruction: Initialize pool, transfer bond, lock initial token reserves
+    export launch: func(
         name: string,
         symbol: string,
         metadata-uri: string,
-        creator-buy: u64
+        telegram: string,
+        x-handle: string,
+        initial-buy: u64,
+        bond-deposit: u64
     ) -> result<pubkey, string>;
 
-    /// Trading: buy with exact quote input (slippage protection via min-base-out)
-    export buy-exact-in: func(
-        quote-in: u64,
-        min-base-out: u64
+    /// Buy instruction: Constant-product AMM bonding curve purchase
+    export buy: func(
+        quote-in-kelvins: u64,
+        min-tokens-out: u64
     ) -> result<u64, string>;
 
-    /// Trading: buy exact base token amount (slippage protection via max-quote-in)
-    export buy-exact-out: func(
-        base-out: u64,
-        max-quote-in: u64
-    ) -> result<u64, string>;
-
-    /// Trading: sell exact base token amount (slippage protection via min-quote-out)
-    export sell-exact-in: func(
-        base-in: u64,
+    /// Sell instruction: Sell meme tokens back to curve vault for RLO Kelvins
+    export sell: func(
+        tokens-in: u64,
         min-quote-out: u64
     ) -> result<u64, string>;
 
-    /// Trading: sell token for exact quote out (slippage protection via max-base-in)
-    export sell-exact-out: func(
-        quote-out: u64,
-        max-base-in: u64
-    ) -> result<u64, string>;
+    /// Autonomous liveness tick scheduled via Venus AFTER directive
+    export on-heartbeat: func() -> result<bool, string>;
 
-    /// Fee Claim: Pull protocol fee accumulated in quote_vault
-    export claim-protocol-fee: func() -> result<u64, string>;
+    /// Attestation by REX / Edge enclave validator
+    export apply-verification: func(
+        tier: u8,
+        telegram-members: u64,
+        x-account-age-days: u64
+    ) -> result<bool, string>;
 
-    /// Fee Claim: Pull partner fee accumulated in quote_vault
-    export claim-partner-fee: func() -> result<u64, string>;
+    /// Graduate curve to AMM DEX Liquidity Pool
+    export graduate: func() -> result<pubkey, string>;
 
-    /// Fee Claim: Pull creator fee accumulated in quote_vault
-    export claim-creator-fee: func() -> result<u64, string>;
-
-    /// Creator Token Claim: Vested tokens after migration
-    export claim-creator-tokens: func() -> result<u64, string>;
-
-    /// Migration: Autonomous handler triggered via Venus AFTER 1s CALL [migrate]
-    export migrate: func() -> result<pubkey, string>;
-
-    /// Get current state & progress
-    export get-state: func() -> result<launch-state, string>;
+    /// Emergency / Breaker abandonment
+    export abandon: func(reason: u8) -> result<bool, string>;
 }
