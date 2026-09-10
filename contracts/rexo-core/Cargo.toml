@@ -1,5 +1,6 @@
 [package]
 name = "rexo-core"
+# v2: ekonomi jadi data (LaunchConfig), fee jadi tarik (FeeLedger)
 description = "Rexo — meme coin launchpad native untuk Rialo"
 version = "0.2.0"
 edition = "2021"
