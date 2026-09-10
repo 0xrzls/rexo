@@ -24,13 +24,13 @@ on:
     inputs:
       network:
         description: 'Target Rialo Network'
-        required: true
+        required: false
         default: 'devnet'
         type: choice
         options: [ devnet, testnet ]
       deploy_contract:
         description: 'Deploy contract after successful compilation'
-        required: true
+        required: false
         default: true
         type: boolean
 
