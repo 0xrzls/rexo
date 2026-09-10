@@ -1,626 +1,405 @@
 // Copyright (c) 2026 Rexo
 // SPDX-License-Identifier: Apache-2.0
 
-//! # Rexo Core — launchpad meme coin native untuk Rialo
+//! # Rexo v2 — launchpad token untuk Rialo
 //!
 //! ## Aturan menulis di dalam `rialo! { }`
 //!
-//! Blok macro di bawah HANYA memakai konstruksi yang terbukti diterima
-//! parser DSL Venus. Daftar ini disusun dengan membandingkan terhadap file
-//! yang berhasil compile:
+//! Hanya konstruksi yang TERBUKTI diterima parser DSL. Daftar ini disusun
+//! dengan membandingkan terhadap program yang berhasil compile:
 //!
-//! | Konstruksi | Boleh | Catatan |
-//! |---|---|---|
-//! | `// komentar` | ya | |
-//! | `/// doc comment` | **TIDAK** | jadi `#[doc]` di level token; parser berhenti |
-//! | `let x = ...;` | ya | |
-//! | `self.field = ...;` | ya | |
-//! | `if cond { }` / `else { }` | ya | |
-//! | `match` | **tidak terbukti** | pakai if/else |
-//! | `return` | **tidak terbukti** | pakai if/else |
-//! | `AFTER <var> CALL [fn];` | ya | var harus variabel lokal sederhana |
-//! | `SEND` / `START` / `EVERY` / `ON` | **tidak terbukti** | lihat TROUBLESHOOT.md |
-//! | struct literal `Nama { .. }` | ya | |
-//! | `crate::path::fn()` | ya | |
-//! | `msg!(..)` | ya | |
+//! | Konstruksi | Boleh |
+//! |---|---|
+//! | `// komentar` | ya |
+//! | `/// doc comment` | TIDAK — jadi `#[doc]`, parser berhenti |
+//! | `let` / `self.field = ...` / `if` | ya |
+//! | `match` / `return` | tidak terbukti |
+//! | `AFTER <n> seconds CALL [fn];` | ya — durasi RELATIF |
+//! | target `AFTER` | harus `handler fn`, bukan `control fn` |
+//! | `msg!` dengan >1 argumen format | tidak terbukti |
+//! | `self.accounts` / `self.program_id` | field, bukan method |
 //!
-//! Kalau build gagal dengan `unexpected token, expected }`, itu parser DSL,
-//! bukan rustc. Prosedur bisect ada di TROUBLESHOOT.md.
+//! ## Fitur yang SENGAJA tidak ada
 //!
-//! ## Peta arsitektur
+//! Verifikasi sosial REX, lelang tersegel, dan denyut liveness butuh
+//! primitif yang bentuk sintaksisnya belum terkonfirmasi. Tidak ada
+//! stub, tidak ada timer kosong, tidak ada field yang menjanjikannya.
+//! Ditambahkan ketika primitifnya terbukti, bukan sebelumnya.
 //!
-//! ```text
-//! lib.rs        cangkang DSL. Hanya konstruksi terverifikasi.
-//!  ├─ ops.rs        logika bisnis. INI yang diaudit.
-//!  ├─ curve.rs      matematika bonding curve (21 test, nol dependency)
-//!  ├─ state.rs      jembatan u64 <-> u128 (4 test)
-//!  ├─ guards.rs     kontrol akses, status, kolam keluar (10 test)
-//!  ├─ vault.rs      pemindahan kelvin lewat CPI
-//!  ├─ token.rs      mint / burn / transfer Token-2022
-//!  ├─ accounts.rs   parsing & validasi PDA
-//!  ├─ hooks.rs      statistik lintas-peluncuran
-//!  ├─ events.rs     event terstruktur
-//!  ├─ errors.rs     error domain, kode stabil
-//!  └─ constants.rs  seluruh angka ekonomi
-//! ```
+//! ## Yang khas Rialo dan BISA dipakai hari ini
+//!
+//! Migrasi otomatis. Saat kurva habis, `AFTER n seconds CALL [migrate]`
+//! menjalankan migrasi sebagai transaksi terpisah tanpa keeper. Meteora
+//! butuh `dbc-keeper`; LaunchLab butuh seseorang memanggil
+//! `migrate_to_amm`. Di sini chain yang melakukannya.
 
 pub mod accounts;
-pub mod constants;
+pub mod config;
 pub mod curve;
 pub mod errors;
-pub mod events;
-pub mod guards;
-pub mod hooks;
+pub mod fees;
 pub mod ops;
 pub mod state;
 pub mod token;
 pub mod vault;
-
-pub use constants::*;
 
 use rialo_venus_proc_macro::rialo;
 
 rialo! {
     workflow {
         state {
+            partner: Pubkey,
             creator: Pubkey,
             mint: Pubkey,
-            treasury: Pubkey,
+            protocol_treasury: Pubkey,
+
             name: String,
             symbol: String,
             metadata_uri: String,
 
-            telegram_handle: String,
-            x_handle: String,
+            lifecycle: u8,
 
-            tier: u8,
-            verified_at: u64,
-            telegram_members: u64,
-            x_account_age_days: u64,
-            heartbeat_count: u64,
-            heartbeat_failures: u32,
+            cfg_virtual_quote: u64,
+            cfg_virtual_token: u64,
+            cfg_total_base_sell: u64,
+            cfg_lp_reserve: u64,
 
-            status: u8,
-            created_at: u64,
-            sealed_until: u64,
-            graduated_at: u64,
+            fee_total_bps: u64,
+            fee_protocol_bps: u64,
+            fee_partner_bps: u64,
+            fee_creator_bps: u64,
+            fee_referral_bps: u64,
+
+            vest_bps: u64,
+            vest_cliff_secs: u64,
+            vest_duration_secs: u64,
 
             virtual_quote: u64,
             virtual_token: u64,
             real_quote: u64,
             real_token: u64,
-            fees_protocol: u64,
-            fees_creator: u64,
-            forfeited_quote: u64,
 
-            bond: u64,
-            bond_settled: bool,
-            creator_tokens_locked: u64,
-            creator_tranches_unlocked: u8,
+            ledger_protocol: u64,
+            ledger_partner: u64,
+            ledger_creator: u64,
+            ledger_referral_paid: u64,
 
-            exit_pool: u64,
-            exit_base: u64,
+            creator_allocation: u64,
+            creator_claimed: u64,
 
-            sealed_order_count: u32,
-            sealed_cursor: u32,
-
-            sfs_funded: u64,
-            dex_pool: String,
+            migrate_target: u8,
+            created_at: u64,
+            migrated_at: u64,
         }
 
         program {
             use rialo_s_program::{entrypoint::ProgramResult, msg, pubkey::Pubkey};
 
             // ===============================================================
-            // 1. LAUNCH
+            // CREATOR — luncurkan token dari sebuah config
             //
-            // Perhatikan yang TIDAK ada di parameter: `tier`. Kreator tidak
-            // pernah menetapkan tier-nya sendiri.
+            // Parameter kurva dan fee datang dari LaunchConfig milik
+            // partner, bukan dari konstanta di kode. Itu yang membuat satu
+            // program melayani banyak launchpad.
             // ===============================================================
-            initiating fn launch(
+            initiating fn initialize(
                 &mut self,
+                partner: Pubkey,
                 creator: Pubkey,
                 mint: Pubkey,
-                treasury: Pubkey,
+                protocol_treasury: Pubkey,
                 name: String,
                 symbol: String,
                 metadata_uri: String,
-                telegram_handle: String,
-                x_handle: String,
-                bond: u64,
-                dev_buy: u64,
+                creator_buy: u64,
             ) -> ProgramResult {
                 let now = self.unix_timestamp() as u64;
-
-                // AKSES AKUN — lihat CATATAN AKSES AKUN di bawah blok macro.
-                // Kalau baris ini masih error, jalankan `cargo expand` dan
-                // baca definisi `struct Program` yang digenerate.
                 let accs = self.accounts;
-                let acc = crate::accounts::LaunchAccounts::parse(self.program_id, accs)?;
+                let acc = crate::accounts::parse_init(self.program_id, accs)?;
 
-                let params = crate::ops::LaunchParams { bond, dev_buy, now };
-                let out = crate::ops::launch(self.program_id, &acc, params)?;
+                let cfg = crate::accounts::read_config(acc.config)?;
+                let out = crate::ops::initialize(
+                    self.program_id, &acc, &cfg, creator_buy, now,
+                )?;
+                let l = out.launch;
 
+                self.partner = partner;
                 self.creator = creator;
                 self.mint = mint;
-                self.treasury = treasury;
+                self.protocol_treasury = protocol_treasury;
                 self.name = name;
                 self.symbol = symbol;
                 self.metadata_uri = metadata_uri;
-                self.telegram_handle = telegram_handle;
-                self.x_handle = x_handle;
 
-                self.tier = out.view.tier;
-                self.status = out.view.status;
+                self.lifecycle = l.state;
+                self.cfg_virtual_quote = l.cfg_virtual_quote;
+                self.cfg_virtual_token = l.cfg_virtual_token;
+                self.cfg_total_base_sell = l.cfg_total_base_sell;
+                self.cfg_lp_reserve = l.cfg_lp_reserve;
+
+                self.fee_total_bps = l.fees.total_bps;
+                self.fee_protocol_bps = l.fees.protocol_bps;
+                self.fee_partner_bps = l.fees.partner_bps;
+                self.fee_creator_bps = l.fees.creator_bps;
+                self.fee_referral_bps = l.fees.referral_bps;
+
+                self.vest_bps = l.vesting.vested_bps;
+                self.vest_cliff_secs = l.vesting.cliff_secs;
+                self.vest_duration_secs = l.vesting.duration_secs;
+
+                self.virtual_quote = l.virtual_quote;
+                self.virtual_token = l.virtual_token;
+                self.real_quote = l.real_quote;
+                self.real_token = l.real_token;
+
+                self.ledger_protocol = l.ledger.protocol;
+                self.ledger_partner = l.ledger.partner;
+                self.ledger_creator = l.ledger.creator;
+                self.ledger_referral_paid = l.ledger.referral_paid;
+
+                self.creator_allocation = l.creator_allocation;
+                self.creator_claimed = 0;
+                self.migrate_target = l.migrate_target;
                 self.created_at = now;
-                self.sealed_until = out.sealed_until;
-                self.graduated_at = 0;
+                self.migrated_at = 0;
 
-                self.virtual_quote = out.view.virtual_quote;
-                self.virtual_token = out.view.virtual_token;
-                self.real_quote = out.view.real_quote;
-                self.real_token = out.view.real_token;
-                self.fees_protocol = out.view.fees_protocol;
-                self.fees_creator = out.view.fees_creator;
-                self.forfeited_quote = out.view.forfeited_quote;
-
-                self.bond = bond;
-                self.bond_settled = false;
-                self.creator_tokens_locked = out.dev_tokens;
-                self.creator_tranches_unlocked = 0;
-
-                self.exit_pool = 0;
-                self.exit_base = 0;
-                self.sealed_order_count = 0;
-                self.sealed_cursor = 0;
-                self.heartbeat_count = 0;
-                self.heartbeat_failures = 0;
-                self.sfs_funded = 0;
-
-                // Tutup jendela sealed. Reaktif, bukan cron.
-                // AFTER memakai timestamp ABSOLUT — terkonfirmasi dari file
-                // yang berhasil compile (created_at + interval).
-                let settle_at = out.sealed_until;
-                AFTER settle_at CALL [settle_sealed_batch];
-
-                let first_beat = now + crate::HEARTBEAT_INTERVAL_SECS;
-                AFTER first_beat CALL [heartbeat];
-
-                // ---------------------------------------------------------
-                // VERIFIKASI SOSIAL LEWAT REX — BELUM AKTIF
-                //
-                // Bentuk statement webcall Venus belum terverifikasi. Yang
-                // terbukti diterima parser hanya AFTER..CALL. Bentuk yang
-                // kutebak sebelumnya membuat macro gagal parse:
-                //
-                //   SEND verify_socials(a, b) CALL [on_socials_verified];
-                //
-                // Cari bentuk aslinya di venus/http-fetch atau
-                // venus/rex-wasm-pipeline, lalu aktifkan di sini.
-                //
-                // Sampai itu terjadi, on_socials_verified tidak pernah
-                // dipanggil dan tier tetap 0 (Unverified). Itu default yang
-                // AMAN: tier paling ketat, kreator tidak dapat bagi fee.
-                // ---------------------------------------------------------
-
-                msg!("rexo::launched sealed_until={}", settle_at);
-                msg!("rexo::launched next_beat={}", first_beat);
+                msg!("rexo::init supply_minted={}", self.cfg_total_base_sell);
                 Ok(())
             }
 
             // ===============================================================
-            // 2. VERIFIKASI
+            // TRADING — empat instruksi, mengikuti LaunchLab
             // ===============================================================
-            // on_socials_verified DIHAPUS.
-            //
-            // Macro membangun enum `interface::Instruction` hanya dari entry
-            // point yang benar-benar bisa dipanggil. Handler tanpa operasi
-            // async yang menargetkannya tidak masuk enum itu, sehingga kode
-            // dispatch yang digenerate merujuk varian yang tidak ada:
-            //
-            //   error[E0599]: no variant named `OnSocialsVerified`
-            //                 found for enum `interface::Instruction`
-            //
-            // Kembalikan fungsi ini BERSAMAAN dengan statement webcall yang
-            // menargetkannya. Handler dan pemanggilnya satu paket.
-
-            // ===============================================================
-            // 3. TRADING
-            // ===============================================================
-            control fn buy(&mut self, quote_in: u64, min_tokens_out: u64) -> ProgramResult {
-                let now = self.unix_timestamp() as u64;
-                let in_window = self.status == crate::STATUS_SEALED
-                    && now < self.sealed_until;
-
-                if in_window {
-                    // Order diantre, tidak diisi berurutan. Tidak ada
-                    // keuntungan menjadi pertama.
-                    //
-                    // TODO(sealed): antrekan sebagai order TERENKRIPSI ke
-                    // REX. Order tidak boleh tersimpan plaintext di state.
-                    self.sealed_order_count += 1;
-                    msg!("rexo::buy queued n={}", self.sealed_order_count);
-                } else {
-                    let accs = self.accounts;
-                    let acc = crate::accounts::TradeAccounts::parse(
-                        self.program_id, accs,
-                    )?;
-                    let mut view = crate::state::view_from(
-                        self.tier,
-                        self.status,
-                        self.virtual_quote,
-                        self.virtual_token,
-                        self.real_quote,
-                        self.real_token,
-                        self.fees_protocol,
-                        self.fees_creator,
-                        self.forfeited_quote,
-                    );
-
-                    let out = crate::ops::buy(
-                        self.program_id, &acc, &mut view, quote_in, min_tokens_out, now,
-                    )?;
-
-                    self.status = view.status;
-                    self.virtual_quote = view.virtual_quote;
-                    self.virtual_token = view.virtual_token;
-                    self.real_quote = view.real_quote;
-                    self.real_token = view.real_token;
-                    self.fees_protocol = view.fees_protocol;
-                    self.fees_creator = view.fees_creator;
-                    self.forfeited_quote = view.forfeited_quote;
-
-                    if out.graduated {
-                        self.graduated_at = now;
-                        // Dijadwalkan, bukan dipanggil langsung: graduate
-                        // butuh set akun berbeda, jadi ia harus jalan
-                        // sebagai transaksi tersendiri.
-                        let grad_at = now + 1;
-                        AFTER grad_at CALL [graduate];
-                    }
-                }
-                Ok(())
-            }
-
-            control fn sell(&mut self, tokens_in: u64, min_quote_out: u64) -> ProgramResult {
-                let now = self.unix_timestamp() as u64;
+            control fn buy_exact_in(&mut self, quote_in: u64, min_base_out: u64)
+                -> ProgramResult
+            {
                 let accs = self.accounts;
-                let acc = crate::accounts::TradeAccounts::parse(self.program_id, accs)?;
-                let mut view = crate::state::view_from(
-                    self.tier,
-                    self.status,
-                    self.virtual_quote,
-                    self.virtual_token,
-                    self.real_quote,
-                    self.real_token,
-                    self.fees_protocol,
-                    self.fees_creator,
-                    self.forfeited_quote,
-                );
-
-                let params = crate::ops::SellParams {
-                    tokens_in,
-                    min_quote_out,
-                    creator: &self.creator,
-                    creator_tranches_unlocked: self.creator_tranches_unlocked,
-                    exit_pool: self.exit_pool,
-                    exit_base: self.exit_base,
-                    now,
-                };
-                let out = crate::ops::sell(&acc, &mut view, params)?;
-
-                self.virtual_quote = view.virtual_quote;
-                self.virtual_token = view.virtual_token;
-                self.real_quote = view.real_quote;
-                self.real_token = view.real_token;
-                self.fees_protocol = view.fees_protocol;
-                self.fees_creator = view.fees_creator;
-
-                // Kolam keluar menyusut seiring pemegang token keluar.
-                self.exit_pool = out.exit_pool_left;
-                self.exit_base = out.exit_base_left;
-                Ok(())
-            }
-
-            // ===============================================================
-            // 4. SEALED BATCH
-            // ===============================================================
-            handler fn settle_sealed_batch(&mut self) -> ProgramResult {
-                if self.status == crate::STATUS_SEALED {
-                    if self.sealed_order_count == 0 {
-                        self.status = crate::STATUS_ACTIVE;
-                        self.sealed_until = 0;
-                        msg!("rexo::sealed empty, active");
-                    } else {
-                        // TODO(sealed): panggil REX untuk mendekripsi batch
-                        // dan menghitung satu clearing price. Butuh bentuk
-                        // statement webcall yang belum terverifikasi.
-                        //
-                        // Sementara: buka perdagangan normal supaya alur
-                        // tidak macet. Ini MELEMAHKAN proteksi sniper —
-                        // jangan dibiarkan begini di mainnet.
-                        self.status = crate::STATUS_ACTIVE;
-                        self.sealed_until = 0;
-                        msg!("rexo::sealed fallback n={}", self.sealed_order_count);
-                        AFTER 1 seconds CALL [distribute_fills];
-                    }
-                }
-                Ok(())
-            }
-
-            handler fn distribute_fills(&mut self) -> ProgramResult {
-                if self.sealed_cursor < self.sealed_order_count {
-                    // TODO(sealed): transfer isian untuk sealed_cursor
-                    self.sealed_cursor += 1;
-                    // +1 detik, bukan "sekarang": menjadwalkan pada
-                    // timestamp saat ini berisiko dieksekusi ulang di blok
-                    // yang sama dan menghabiskan compute budget.
-                    //
-                    // Ini bukan loop — ini rekursi lewat state cursor.
-                    // Venus melarang statement async di dalam for/while.
-                    let next = self.unix_timestamp() as u64 + 1;
-                    AFTER next CALL [distribute_fills];
-                }
-                Ok(())
-            }
-
-            // ===============================================================
-            // 5. HEARTBEAT
-            // ===============================================================
-            handler fn heartbeat(&mut self) -> ProgramResult {
-                let running = self.status == crate::STATUS_ACTIVE
-                    || self.status == crate::STATUS_SEALED;
-
-                if running {
-                    self.heartbeat_count += 1;
-                    let now = self.unix_timestamp() as u64;
-
-                    // TODO(rex): di sini seharusnya webcall verifikasi
-                    // sosial. Tanpa bentuk statement yang terverifikasi,
-                    // heartbeat hanya berdetak tanpa memeriksa apa pun.
-                    let next_tick = now + crate::HEARTBEAT_INTERVAL_SECS;
-                    AFTER next_tick CALL [heartbeat];
-
-                    msg!("rexo::beat n={}", self.heartbeat_count);
-                    msg!("rexo::beat next={}", next_tick);
-                }
-                Ok(())
-            }
-
-            // on_heartbeat DIHAPUS — alasan sama seperti di atas.
-            //
-            // Konsekuensinya: `heartbeat` sekarang berdetak tanpa memeriksa
-            // apa pun, dan `try_abandon` tidak pernah terpicu otomatis.
-            // Tidak ada bond yang bisa hangus. Itu default yang aman.
-
-            control fn try_abandon(&mut self) -> ProgramResult {
-                let now = self.unix_timestamp() as u64;
-                let stats = crate::hooks::global_failure_stats();
-
-                // Pengaman diperiksa DULU, di luar ops::abandon, supaya
-                // penekanan tidak membatalkan transaksi dan kita masih bisa
-                // menjadwalkan ulang heartbeat.
-                let permitted =
-                    crate::guards::abandonment_permitted(stats.0, stats.1).is_ok();
-
-                if permitted {
-                    let accs = self.accounts;
-                    let acc = crate::accounts::TradeAccounts::parse(
-                        self.program_id, accs,
-                    )?;
-                    let mut view = crate::state::view_from(
-                        self.tier,
-                        self.status,
-                        self.virtual_quote,
-                        self.virtual_token,
-                        self.real_quote,
-                        self.real_token,
-                        self.fees_protocol,
-                        self.fees_creator,
-                        self.forfeited_quote,
-                    );
-
-                    let out = crate::ops::abandon(
-                        self.program_id,
-                        &acc,
-                        &mut view,
-                        self.bond,
-                        self.creator_tokens_locked,
-                        stats.0,
-                        stats.1,
-                        now,
-                    )?;
-
-                    self.status = crate::STATUS_ABANDONED;
-                    self.tier = crate::TIER_UNVERIFIED;
-                    self.bond = 0;
-                    self.bond_settled = true;
-                    self.creator_tokens_locked = 0;
-
-                    // Bond hangus jadi kolam yang dibayar pro-rata ke
-                    // pemegang token saat mereka keluar. Menjual TETAP
-                    // diizinkan setelah abandonment.
-                    self.exit_pool = out.exit_pool;
-                    self.exit_base = out.exit_base;
-
-                    msg!("rexo::abandoned pool={}", out.exit_pool);
-                    msg!("rexo::abandoned base={}", out.exit_base);
-                } else {
-                    // Kegagalan sistemik: ini masalah kita, bukan mereka.
-                    self.heartbeat_failures = 0;
-                    let next_tick = now + crate::HEARTBEAT_INTERVAL_SECS;
-                    AFTER next_tick CALL [heartbeat];
-                    msg!("rexo::abandon suppressed (correlated failure)");
-                }
-                Ok(())
-            }
-
-            // ===============================================================
-            // 6. VESTING
-            // ===============================================================
-            control fn unlock_tranche(&mut self) -> ProgramResult {
-                let eligible = self.status != crate::STATUS_ABANDONED
-                    && self.creator_tokens_locked > 0;
-
-                if eligible {
-                    let view = crate::state::view_from(
-                        self.tier,
-                        self.status,
-                        self.virtual_quote,
-                        self.virtual_token,
-                        self.real_quote,
-                        self.real_token,
-                        self.fees_protocol,
-                        self.fees_creator,
-                        self.forfeited_quote,
-                    );
-                    let cfg = view.config();
-                    let progress = view.curve().progress_bps(&cfg) as u64;
-                    let graduated = self.status == crate::STATUS_GRADUATED
-                        || self.status == crate::STATUS_FINALIZED;
-
-                    let locked = crate::guards::creator_locked(
-                        self.creator_tranches_unlocked, progress, graduated,
-                    );
-
-                    if !locked {
-                        self.creator_tranches_unlocked += 1;
-                        let amount = self.creator_tokens_locked / 3;
-                        // TODO(vesting): transfer `amount` ke kreator
-                        msg!("rexo::vest t={}", self.creator_tranches_unlocked);
-                        msg!("rexo::vest amt={}", amount);
-                    }
-                }
-                Ok(())
-            }
-
-            // ===============================================================
-            // 7. GRADUATION
-            // ===============================================================
-            handler fn graduate(&mut self) -> ProgramResult {
-                let now = self.unix_timestamp() as u64;
-                let accs = self.accounts;
-                let acc = crate::accounts::GraduateAccounts::parse(self.program_id, accs)?;
-                let view = crate::state::view_from(
-                    self.tier,
-                    self.status,
-                    self.virtual_quote,
-                    self.virtual_token,
-                    self.real_quote,
-                    self.real_token,
-                    self.fees_protocol,
-                    self.fees_creator,
-                    self.forfeited_quote,
-                );
-
-                let out = crate::ops::graduate(
-                    self.program_id, &acc, &view, self.bond, self.bond_settled, now,
+                let acc = crate::accounts::parse_trade(self.program_id, accs)?;
+                let mut l = self.load();
+                let r = crate::ops::buy_exact_in(
+                    self.program_id, &acc, &mut l, quote_in, min_base_out,
                 )?;
+                self.store(&l);
 
-                self.bond_settled = true;
-                self.sfs_funded = out.sfs_endowment;
-                self.graduated_at = now;
-                self.status = crate::STATUS_FINALIZED;
+                if r.completed_curve {
+                    // Migrasi otomatis. Tidak ada keeper, tidak ada bot.
+                    AFTER 1 seconds CALL [migrate];
+                    msg!("rexo::curve_complete quote={}", self.real_quote);
+                }
+                Ok(())
+            }
 
-                // TODO(pool): buat pool lalu BURN LP token. LP yang bisa
-                // ditarik kembali membuat "graduation" cuma rug pull dengan
-                // langkah tambahan.
-                // TODO(sfs): buat posisi Stake-for-Service dari treasury.
+            control fn buy_exact_out(&mut self, base_out: u64, max_quote_in: u64)
+                -> ProgramResult
+            {
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_trade(self.program_id, accs)?;
+                let mut l = self.load();
+                let r = crate::ops::buy_exact_out(
+                    self.program_id, &acc, &mut l, base_out, max_quote_in,
+                )?;
+                self.store(&l);
 
-                msg!("rexo::graduated lp_q={}", out.lp_quote);
-                msg!("rexo::graduated sfs={}", out.sfs_endowment);
+                if r.completed_curve {
+                    AFTER 1 seconds CALL [migrate];
+                }
+                Ok(())
+            }
+
+            control fn sell_exact_in(&mut self, base_in: u64, min_quote_out: u64)
+                -> ProgramResult
+            {
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_trade(self.program_id, accs)?;
+                let mut l = self.load();
+                crate::ops::sell_exact_in(
+                    self.program_id, &acc, &mut l, base_in, min_quote_out,
+                )?;
+                self.store(&l);
+                Ok(())
+            }
+
+            control fn sell_exact_out(&mut self, quote_out: u64, max_base_in: u64)
+                -> ProgramResult
+            {
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_trade(self.program_id, accs)?;
+                let mut l = self.load();
+                crate::ops::sell_exact_out(
+                    self.program_id, &acc, &mut l, quote_out, max_base_in,
+                )?;
+                self.store(&l);
                 Ok(())
             }
 
             // ===============================================================
-            // 8. VIEW
+            // KLAIM FEE — pola tarik
+            //
+            // Fee menumpuk di quote_vault selama perdagangan dan ditarik di
+            // sini. v1 memindahkannya tiap trade: dua transfer tambahan per
+            // perdagangan, dan tidak ada saldo tersisa untuk apa pun.
+            // ===============================================================
+            control fn claim_protocol_fee(&mut self) -> ProgramResult {
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_claim(self.program_id, accs)?;
+                let mut l = self.load();
+                let amt = crate::ops::claim_fee(
+                    &mut l, crate::fees::Payee::Protocol, acc.quote_vault, acc.recipient,
+                )?;
+                self.store(&l);
+                msg!("rexo::claim_protocol={}", amt);
+                Ok(())
+            }
+
+            control fn claim_partner_fee(&mut self) -> ProgramResult {
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_claim(self.program_id, accs)?;
+                let mut l = self.load();
+                let amt = crate::ops::claim_fee(
+                    &mut l, crate::fees::Payee::Partner, acc.quote_vault, acc.recipient,
+                )?;
+                self.store(&l);
+                msg!("rexo::claim_partner={}", amt);
+                Ok(())
+            }
+
+            control fn claim_creator_fee(&mut self) -> ProgramResult {
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_claim(self.program_id, accs)?;
+                let mut l = self.load();
+                let amt = crate::ops::claim_fee(
+                    &mut l, crate::fees::Payee::Creator, acc.quote_vault, acc.recipient,
+                )?;
+                self.store(&l);
+                msg!("rexo::claim_creator={}", amt);
+                Ok(())
+            }
+
+            // ===============================================================
+            // KLAIM TOKEN KREATOR — tunduk jadwal vesting
+            //
+            // Tidak ada yang cair sebelum migrasi. Kreator ikut menanggung
+            // risiko sampai kurva benar-benar selesai.
+            // ===============================================================
+            control fn claim_creator_tokens(&mut self) -> ProgramResult {
+                let now = self.unix_timestamp() as u64;
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_creator_claim(self.program_id, accs)?;
+                let mut l = self.load();
+                let amt = crate::ops::claim_creator_tokens(
+                    self.program_id,
+                    &mut l,
+                    acc.launch.key,
+                    acc.mint,
+                    acc.base_vault,
+                    acc.creator_token_account,
+                    acc.authority,
+                    acc.token_program,
+                    now,
+                )?;
+                self.store(&l);
+                msg!("rexo::creator_tokens={}", amt);
+                Ok(())
+            }
+
+            // ===============================================================
+            // MIGRASI — dipicu chain, bukan klien
+            //
+            // handler fn, bukan control fn: target AFTER wajib handler.
+            // ===============================================================
+            handler fn migrate(&mut self) -> ProgramResult {
+                let now = self.unix_timestamp() as u64;
+                let accs = self.accounts;
+                let acc = crate::accounts::parse_migrate(self.program_id, accs)?;
+                let mut l = self.load();
+                let r = crate::ops::migrate(
+                    self.program_id,
+                    &mut l,
+                    acc.launch.key,
+                    acc.mint,
+                    acc.base_vault,
+                    acc.quote_vault,
+                    acc.lp_base_dest,
+                    acc.lp_quote_dest,
+                    acc.authority,
+                    acc.token_program,
+                    now,
+                )?;
+                self.store(&l);
+                self.migrated_at = now;
+                msg!("rexo::migrated quote={}", r.lp_quote);
+                Ok(())
+            }
+
+            // ===============================================================
+            // VIEW
             // ===============================================================
             control fn get_state(&mut self) -> ProgramResult {
-                let view = crate::state::view_from(
-                    self.tier,
-                    self.status,
-                    self.virtual_quote,
-                    self.virtual_token,
-                    self.real_quote,
-                    self.real_token,
-                    self.fees_protocol,
-                    self.fees_creator,
-                    self.forfeited_quote,
-                );
-                let cfg = view.config();
-                let st = view.curve();
-                let progress = st.progress_bps(&cfg) as u64;
-                let price = st.price_per_token().unwrap_or(0) as u64;
-                let mcap = st.market_cap(&cfg).unwrap_or(0) as u64;
-
-                msg!("rexo::state status={}", self.status);
-                msg!("rexo::state tier={}", self.tier);
-                msg!("rexo::state progress_bps={}", progress);
-                msg!("rexo::state price={}", price);
-                msg!("rexo::state mcap={}", mcap);
-                msg!("rexo::res vq={}", self.virtual_quote);
-                msg!("rexo::res vt={}", self.virtual_token);
-                msg!("rexo::res rq={}", self.real_quote);
-                msg!("rexo::res rt={}", self.real_token);
-                msg!("rexo::res exit_pool={}", self.exit_pool);
-                msg!("rexo::res exit_base={}", self.exit_base);
+                let l = self.load();
+                let cfg = l.curve_config();
+                let c = l.curve();
+                msg!("rexo::lifecycle={}", self.lifecycle);
+                msg!("rexo::progress_bps={}", c.progress_bps(&cfg) as u64);
+                msg!("rexo::price={}", c.price_per_token().unwrap_or(0) as u64);
+                msg!("rexo::mcap={}", c.market_cap(&cfg).unwrap_or(0) as u64);
+                msg!("rexo::real_quote={}", self.real_quote);
+                msg!("rexo::real_token={}", self.real_token);
+                msg!("rexo::fees_outstanding={}", l.ledger.outstanding());
                 Ok(())
             }
 
-            // ===============================================================
-            // 9. TERMINATING
-            // ===============================================================
-            terminating fn finalize(&mut self) -> ProgramResult {
-                self.status = crate::STATUS_FINALIZED;
-                msg!("rexo::finalized pool={}", self.dex_pool);
-                Ok(())
-            }
-
-            terminating fn cancel(&mut self) -> ProgramResult {
-                // Setelah ada pembeli, membatalkan sama dengan mencuri.
-                if self.real_quote == 0 {
-                    self.status = crate::STATUS_ABANDONED;
-                    msg!("rexo::cancelled");
-                } else {
-                    msg!("rexo::cancel rejected rq={}", self.real_quote);
+            fn load(&self) -> crate::state::Launch {
+                crate::state::Launch {
+                    state: self.lifecycle,
+                    cfg_virtual_quote: self.cfg_virtual_quote,
+                    cfg_virtual_token: self.cfg_virtual_token,
+                    cfg_total_base_sell: self.cfg_total_base_sell,
+                    cfg_lp_reserve: self.cfg_lp_reserve,
+                    fees: crate::config::FeeSplit {
+                        total_bps: self.fee_total_bps,
+                        protocol_bps: self.fee_protocol_bps,
+                        partner_bps: self.fee_partner_bps,
+                        creator_bps: self.fee_creator_bps,
+                        referral_bps: self.fee_referral_bps,
+                    },
+                    vesting: crate::config::VestingSchedule {
+                        vested_bps: self.vest_bps,
+                        cliff_secs: self.vest_cliff_secs,
+                        duration_secs: self.vest_duration_secs,
+                    },
+                    migrate_target: self.migrate_target,
+                    migrate_delay_secs: 1,
+                    virtual_quote: self.virtual_quote,
+                    virtual_token: self.virtual_token,
+                    real_quote: self.real_quote,
+                    real_token: self.real_token,
+                    ledger: crate::fees::FeeLedger {
+                        protocol: self.ledger_protocol,
+                        partner: self.ledger_partner,
+                        creator: self.ledger_creator,
+                        referral_paid: self.ledger_referral_paid,
+                    },
+                    creator_allocation: self.creator_allocation,
+                    creator_claimed: self.creator_claimed,
+                    created_at: self.created_at,
+                    migrated_at: self.migrated_at,
                 }
-                Ok(())
+            }
+
+            fn store(&mut self, l: &crate::state::Launch) {
+                self.lifecycle = l.state;
+                self.virtual_quote = l.virtual_quote;
+                self.virtual_token = l.virtual_token;
+                self.real_quote = l.real_quote;
+                self.real_token = l.real_token;
+                self.ledger_protocol = l.ledger.protocol;
+                self.ledger_partner = l.ledger.partner;
+                self.ledger_creator = l.ledger.creator;
+                self.ledger_referral_paid = l.ledger.referral_paid;
+                self.creator_allocation = l.creator_allocation;
+                self.creator_claimed = l.creator_claimed;
+                self.migrated_at = l.migrated_at;
             }
         }
     }
 }
-
-// ===========================================================================
-// CATATAN AKSES AKUN
-//
-// Error sebelumnya memberi tahu tipe `self` di dalam macro:
-//
-//   &mut Program<'program, 'account_info>
-//
-// Tipe itu DIGENERATE macro, jadi tidak ada di docs.rs dan tidak bisa
-// dicari. Yang bisa dipastikan dari pesan error:
-//
-//   error[E0599]: no method named `accounts`   -> 5x, sama dengan jumlah
-//   error[E0599]: no method named `program_id` -> 9x  call site di kode
-//
-// Korelasinya persis, jadi keduanya bukan method. Kode sekarang memakai
-// akses FIELD (`self.accounts`, `self.program_id`), yang merupakan bentuk
-// paling umum untuk struct hasil generate dengan dua lifetime seperti itu.
-//
-// KALAU MASIH ERROR, jangan menebak lagi — baca definisinya langsung:
-//
-//   cargo install cargo-expand
-//   cargo expand --lib > /tmp/expanded.rs
-//   grep -n "struct Program" -A 25 /tmp/expanded.rs
-//   grep -n "impl.*Program" -A 40 /tmp/expanded.rs
-//
-// Itu akan menampilkan nama field dan method yang sebenarnya. Kandidat
-// lain yang mungkin, urut dari yang paling masuk akal:
-//
-//   self.account_infos          self.accounts()
-//   self.ctx.accounts           self.infos
-//   self.id                     self.key
-//
-// Ganti di 5 baris `let accs = ...` dan 9 baris `self.program_id`.
-// Seluruh modul lain (ops, accounts, vault, token) tidak perlu disentuh.
-// ===========================================================================
