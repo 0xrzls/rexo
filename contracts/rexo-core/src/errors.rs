@@ -1,56 +1,58 @@
 // Copyright (c) 2026 Rexo
 // SPDX-License-Identifier: Apache-2.0
 
-//! Error domain. Kode numerik stabil — jangan sisipkan varian di tengah
-//! setelah deploy, tambahkan di akhir saja.
+//! Error domain Rexo.
+//!
+//! Setiap error punya kode numerik stabil. Jangan pernah menyisipkan varian
+//! di tengah enum setelah deploy — kode akan bergeser dan klien yang sudah
+//! memetakan kode lama akan salah membaca. Tambahkan di akhir saja.
 
 use rialo_s_program::program_error::ProgramError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum RexoError {
-    // -- config --
-    InvalidConfig = 100,
-    UnsupportedCurve = 101,
-    FeeSplitMismatch = 102,
-    ConfigImmutableField = 103,
-
     // -- lifecycle --
-    AlreadyInitialized = 200,
-    NotInitialized = 201,
-    NotFunding = 202,
-    NotMigrating = 203,
-    AlreadyMigrated = 204,
+    AlreadyInitialized = 100,
+    NotInitialized = 101,
+    WrongStatus = 102,
+    StillSealed = 103,
+    NotSealed = 104,
+    AlreadyGraduated = 105,
+    NotGraduated = 106,
+    Abandoned = 107,
 
     // -- otorisasi --
-    Unauthorized = 300,
-    NotPartner = 301,
-    NotCreator = 302,
+    Unauthorized = 200,
+    CreatorLocked = 201,
+    /// Tier dicoba ditetapkan dari luar hasil verifikasi REX.
+    TierSelfAssignment = 202,
 
-    // -- perdagangan --
-    ZeroAmount = 400,
-    SlippageExceeded = 401,
-    ExceedsCirculating = 402,
-    CurveComplete = 403,
-    MathOverflow = 404,
-    ExceedsMaxIn = 405,
+    // -- kurva --
+    ZeroAmount = 300,
+    SlippageExceeded = 301,
+    ExceedsCirculating = 302,
+    CurveComplete = 303,
+    MathOverflow = 304,
+    InvalidCurveConfig = 305,
 
-    // -- batas --
-    CreatorCapExceeded = 500,
+    // -- tier & bond --
+    CreatorCapExceeded = 400,
+    BondTooSmall = 401,
+    BondAlreadySettled = 402,
 
     // -- akun --
-    InvalidVault = 600,
-    InvalidAuthority = 601,
-    InvalidMint = 602,
-    InsufficientVaultBalance = 603,
-    AccountMismatch = 604,
+    InvalidVault = 500,
+    InvalidMintAuthority = 501,
+    InvalidMint = 502,
+    InsufficientVaultBalance = 503,
+    AccountNotRentExempt = 504,
 
-    // -- vesting --
-    NothingToClaim = 700,
-    VestingNotStarted = 701,
-
-    // -- fee --
-    NoFeesToClaim = 800,
+    // -- verifikasi --
+    SocialVerificationFailed = 600,
+    /// Kegagalan heartbeat terkorelasi lintas token: ini masalah kita,
+    /// bukan token yang ditinggalkan. Jangan hanguskan bond.
+    CorrelatedFailureGuard = 601,
 }
 
 impl From<RexoError> for ProgramError {
@@ -62,48 +64,51 @@ impl From<RexoError> for ProgramError {
 impl core::fmt::Display for RexoError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
-            RexoError::InvalidConfig => "invalid launch config",
-            RexoError::UnsupportedCurve => "curve type not supported",
-            RexoError::FeeSplitMismatch => "fee shares do not sum to total",
-            RexoError::ConfigImmutableField => "field cannot change after config is in use",
-            RexoError::AlreadyInitialized => "already initialized",
-            RexoError::NotInitialized => "not initialized",
-            RexoError::NotFunding => "launch is not accepting trades",
-            RexoError::NotMigrating => "launch is not ready to migrate",
-            RexoError::AlreadyMigrated => "already migrated",
+            RexoError::AlreadyInitialized => "launch already initialized",
+            RexoError::NotInitialized => "launch not initialized",
+            RexoError::WrongStatus => "operation not allowed in current status",
+            RexoError::StillSealed => "sealed window has not closed",
+            RexoError::NotSealed => "not in sealed window",
+            RexoError::AlreadyGraduated => "curve already graduated",
+            RexoError::NotGraduated => "curve has not graduated",
+            RexoError::Abandoned => "launch abandoned",
             RexoError::Unauthorized => "signer not authorized",
-            RexoError::NotPartner => "signer is not the config partner",
-            RexoError::NotCreator => "signer is not the launch creator",
+            RexoError::CreatorLocked => "creator allocation still locked",
+            RexoError::TierSelfAssignment => "tier may only be set by REX verification",
             RexoError::ZeroAmount => "amount resolves to zero",
-            RexoError::SlippageExceeded => "output below minimum",
+            RexoError::SlippageExceeded => "slippage limit exceeded",
             RexoError::ExceedsCirculating => "exceeds circulating supply",
             RexoError::CurveComplete => "curve complete",
             RexoError::MathOverflow => "arithmetic overflow",
-            RexoError::ExceedsMaxIn => "input above maximum",
+            RexoError::InvalidCurveConfig => "invalid curve config",
             RexoError::CreatorCapExceeded => "creator allocation cap exceeded",
+            RexoError::BondTooSmall => "launch bond below tier minimum",
+            RexoError::BondAlreadySettled => "bond already returned or forfeited",
             RexoError::InvalidVault => "vault PDA mismatch",
-            RexoError::InvalidAuthority => "authority PDA mismatch",
-            RexoError::InvalidMint => "mint mismatch",
+            RexoError::InvalidMintAuthority => "mint authority PDA mismatch",
+            RexoError::InvalidMint => "mint account mismatch",
             RexoError::InsufficientVaultBalance => "vault balance too low",
-            RexoError::AccountMismatch => "account does not match expected PDA",
-            RexoError::NothingToClaim => "nothing to claim",
-            RexoError::VestingNotStarted => "vesting has not started",
-            RexoError::NoFeesToClaim => "no fees accrued",
+            RexoError::AccountNotRentExempt => "account not rent exempt",
+            RexoError::SocialVerificationFailed => "social verification failed",
+            RexoError::CorrelatedFailureGuard => "correlated verification failure; abandonment suppressed",
         })
     }
 }
 
+/// Jembatan dari error kurva murni ke error program.
 impl From<crate::curve::CurveError> for RexoError {
     fn from(e: crate::curve::CurveError) -> Self {
         use crate::curve::CurveError as C;
         match e {
             C::ZeroAmount => RexoError::ZeroAmount,
             C::CurveComplete => RexoError::CurveComplete,
-            C::CurveNotComplete => RexoError::NotMigrating,
+            C::CurveNotComplete => RexoError::NotGraduated,
             C::Overflow => RexoError::MathOverflow,
             C::SlippageExceeded => RexoError::SlippageExceeded,
             C::ExceedsCirculating => RexoError::ExceedsCirculating,
-            C::InvalidConfig => RexoError::InvalidConfig,
+            C::InvalidConfig => RexoError::InvalidCurveConfig,
+            C::CreatorCapExceeded => RexoError::CreatorCapExceeded,
+            C::BondTooSmall => RexoError::BondTooSmall,
         }
     }
 }
