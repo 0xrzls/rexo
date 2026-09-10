@@ -14,12 +14,6 @@
 name: Rialo Contract Build & Deploy Pipeline
 
 on:
-  push:
-    branches: [ main, master ]
-    paths:
-      - 'contracts/**'
-      - '.github/workflows/deploy.yml'
-      - '.github/scripts/**'
   workflow_dispatch:
     inputs:
       network:
@@ -35,6 +29,12 @@ on:
         required: false
         default: true
         type: boolean
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/deploy.yml'
+      - '.github/scripts/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -231,11 +231,11 @@ jobs:
           if-no-files-found: error
 
   deploy-contract:
-    name: Deploy to ${{ inputs.network }}
+    name: Deploy to ${{ inputs.network || 'devnet' }}
     needs: build-contract
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_contract }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.deploy_contract == true || inputs.deploy_contract == 'true') }}
     runs-on: ubuntu-22.04
-    environment: ${{ inputs.network }}
+    environment: ${{ inputs.network || 'devnet' }}
     permissions:
       contents: write
 
@@ -303,9 +303,9 @@ jobs:
         run: |
           set -uo pipefail
           echo "Meminta 2x airdrop (kebutuhan rent buffer Loader V4 ~1.07 RLO)..."
-          rialo client airdrop -n ${{ inputs.network }} --amount 1 || echo "::warning::Airdrop 1 gagal / rate-limited"
+          rialo client airdrop -n ${{ inputs.network || 'devnet' }} --amount 1 || echo "::warning::Airdrop 1 gagal / rate-limited"
           sleep 3
-          rialo client airdrop -n ${{ inputs.network }} --amount 1 || echo "::warning::Airdrop 2 gagal / rate-limited"
+          rialo client airdrop -n ${{ inputs.network || 'devnet' }} --amount 1 || echo "::warning::Airdrop 2 gagal / rate-limited"
 
       # -------------------------------------------------------------------
       # Deploy langsung binary .polkavm
@@ -314,7 +314,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Deploying binary artifact: ${POLKAVM_PATH}"
-          rialo client program deploy -n ${{ inputs.network }} "${POLKAVM_PATH}" 2>&1 | tee /tmp/deploy.log
+          rialo client program deploy -n ${{ inputs.network || 'devnet' }} "${POLKAVM_PATH}" 2>&1 | tee /tmp/deploy.log
           
           # Ekstrak Signature transaksi deploy secara deterministik dari output
           # Signature berupa base58 86-90 karakter
@@ -327,7 +327,7 @@ jobs:
           if [ -n "${SIG}" ]; then
             echo "Transaksi deploy berhasil disiarkan dengan signature: ${SIG}"
             echo "Mengambil rincian transaksi on-chain untuk mengekstrak Program ID..."
-            rialo client transaction -n ${{ inputs.network }} --json "${SIG}" > /tmp/tx.json || true
+            rialo client transaction -n ${{ inputs.network || 'devnet' }} --json "${SIG}" > /tmp/tx.json || true
             PROGRAM_ID=$(python3 -c "
 import json, sys
 try:
@@ -369,7 +369,7 @@ if m:
           set -euo pipefail
           echo "Memverifikasi akun program on-chain: ${PROGRAM_ID}"
           
-          rialo client account -n ${{ inputs.network }} --json "${PROGRAM_ID}" > /tmp/account.json
+          rialo client account -n ${{ inputs.network || 'devnet' }} --json "${PROGRAM_ID}" > /tmp/account.json
           
           python3 - << 'EOF'
           import json, base64, hashlib, sys, os
@@ -431,7 +431,7 @@ if m:
 
           summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
           program_id = os.environ.get('PROGRAM_ID', '')
-          network = "${{ inputs.network }}"
+          network = "${{ inputs.network || 'devnet' }}"
           if summary_path:
               with open(summary_path, 'a') as sf:
                   sf.write(f"### Ringkasan Deployment ke {network}\n")
@@ -455,7 +455,7 @@ if m:
           import json, os, datetime
 
           program_id = os.environ.get('PROGRAM_ID', '').strip()
-          network = "${{ inputs.network }}"
+          network = "${{ inputs.network || 'devnet' }}"
           run_number = os.environ.get('GITHUB_RUN_NUMBER', '0')
           loader = "RiscVLoader11111111111111111111111111111111"
 
