@@ -24,7 +24,10 @@ use rialo_s_program::{
     rent::Rent, system_instruction, sysvar::Sysvar,
 };
 
-use crate::constants::{MINT_AUTHORITY_SEED, TOKEN_DECIMALS};
+use crate::config::{AUTHORITY_SEED, BASE_VAULT_SEED};
+
+/// Desimal token yang diluncurkan.
+pub const TOKEN_DECIMALS: u8 = 6;
 use crate::errors::RexoError;
 
 // Alias supaya ganti versi token program cuma menyentuh satu baris.
@@ -32,15 +35,18 @@ use rialo_spl_token_2022 as token;
 
 /// Ukuran akun mint Token-2022 tanpa extension.
 const MINT_SIZE: usize = 82;
-
-/// Ukuran akun token Token-2022 tanpa extension (Lubang 7.1).
+/// Ukuran akun token Token-2022 tanpa extension.
 const TOKEN_ACCOUNT_SIZE: usize = 165;
 
-pub fn derive_mint_authority(program_id: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[MINT_AUTHORITY_SEED, mint.as_array()], program_id)
+pub fn derive_base_vault(program_id: &Pubkey, launch: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[BASE_VAULT_SEED, launch.as_array()], program_id)
 }
 
-pub fn assert_mint_authority(
+pub fn derive_mint_authority(program_id: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[AUTHORITY_SEED, mint.as_array()], program_id)
+}
+
+pub fn assert_authority(
     program_id: &Pubkey,
     mint: &Pubkey,
     authority: &AccountInfo<'_>,
@@ -48,7 +54,7 @@ pub fn assert_mint_authority(
     let (expected, bump) = derive_mint_authority(program_id, mint);
     if expected != *authority.key {
         msg!("mint authority mismatch: got {} expected {}", authority.key, expected);
-        return Err(RexoError::InvalidMintAuthority.into());
+        return Err(RexoError::InvalidAuthority.into());
     }
     Ok(bump)
 }
@@ -62,13 +68,13 @@ pub fn create_mint_and_lock<'a>(
     payer: &AccountInfo<'a>,
     mint: &AccountInfo<'a>,
     mint_authority: &AccountInfo<'a>,
-    curve_token_account: &AccountInfo<'a>,
+    base_vault: &AccountInfo<'a>,
     token_program: &AccountInfo<'a>,
     system_program_account: &AccountInfo<'a>,
     total_supply: u64,
 ) -> ProgramResult {
-    let bump = assert_mint_authority(program_id, mint.key, mint_authority)?;
-    let seeds: &[&[u8]] = &[MINT_AUTHORITY_SEED, mint.key.as_array(), &[bump]];
+    let bump = assert_authority(program_id, mint.key, mint_authority)?;
+    let seeds: &[&[u8]] = &[AUTHORITY_SEED, mint.key.as_array(), &[bump]];
 
     // 1. alokasikan akun mint
     let rent = Rent::get()?;
@@ -95,51 +101,70 @@ pub fn create_mint_and_lock<'a>(
         &[mint.clone(), token_program.clone()],
     )?;
 
-    // 2b. Buat & inisialisasi akun token kurva (curve_token_account) untuk mint_authority.
-    // TAMBALAN LUBANG 7.1: Program bertanggung jawab membuat dan memverifikasi akun ini.
-    // Tanpa langkah ini, `mint_to` ke akun yang belum dialokasikan akan gagal 100%.
-    if curve_token_account.kelvins() == 0 {
-        invoke(
-            &system_instruction::create_account(
-                payer.key,
-                curve_token_account.key,
-                rent.minimum_balance(TOKEN_ACCOUNT_SIZE),
-                TOKEN_ACCOUNT_SIZE as u64,
-                token_program.key,
-            ),
-            &[payer.clone(), curve_token_account.clone(), system_program_account.clone()],
-        )?;
+    // 3. buat akun token kurva SEBAGAI PDA MILIK PROGRAM.
+    //
+    // Ini yang hilang sebelumnya, dan tanpanya `mint_to` di langkah 4
+    // gagal — akun token yang belum diinisialisasi tidak bisa menerima
+    // hasil cetak. Akibatnya `launch` gagal 100%.
+    let (expected_ta, ta_bump) = derive_base_vault(program_id, mint.key);
+    if expected_ta != *base_vault.key {
+        msg!("curve token account mismatch");
+        return Err(RexoError::InvalidVault.into());
     }
+    let ta_seeds: &[&[u8]] = &[BASE_VAULT_SEED, mint.key.as_array(), &[ta_bump]];
+
+    invoke_signed(
+        &system_instruction::create_account(
+            payer.key,
+            base_vault.key,
+            rent.minimum_balance(TOKEN_ACCOUNT_SIZE),
+            TOKEN_ACCOUNT_SIZE as u64,
+            token_program.key,
+        ),
+        &[
+            payer.clone(),
+            base_vault.clone(),
+            system_program_account.clone(),
+        ],
+        &[ta_seeds],
+    )?;
+
+    // Pemiliknya PDA mint_authority, bukan payer. Kreator tidak pernah
+    // bisa menyentuh supply kurva secara langsung.
     invoke(
         &token::instruction::initialize_account3(
             token_program.key,
-            curve_token_account.key,
+            base_vault.key,
             mint.key,
             mint_authority.key,
         )?,
-        &[curve_token_account.clone(), mint.clone(), token_program.clone()],
+        &[
+            base_vault.clone(),
+            mint.clone(),
+            token_program.clone(),
+        ],
     )?;
 
-    // 3. cetak SELURUH supply ke akun token kurva
+    // 4. cetak SELURUH supply ke akun token kurva
     invoke_signed(
         &token::instruction::mint_to(
             token_program.key,
             mint.key,
-            curve_token_account.key,
+            base_vault.key,
             mint_authority.key,
             &[],
             total_supply,
         )?,
         &[
             mint.clone(),
-            curve_token_account.clone(),
+            base_vault.clone(),
             mint_authority.clone(),
             token_program.clone(),
         ],
         &[seeds],
     )?;
 
-    // 4. CABUT mint authority — permanen, tidak bisa dibatalkan
+    // 5. CABUT mint authority — permanen, tidak bisa dibatalkan
     invoke_signed(
         &token::instruction::set_authority(
             token_program.key,
@@ -153,7 +178,7 @@ pub fn create_mint_and_lock<'a>(
         &[seeds],
     )?;
 
-    // 5. CABUT freeze authority — tanpa ini kreator masih bisa membekukan
+    // 6. CABUT freeze authority — tanpa ini kreator masih bisa membekukan
     //    wallet pemegang token, yang secara efektif adalah rug pull.
     invoke_signed(
         &token::instruction::set_authority(
@@ -178,7 +203,7 @@ pub fn create_mint_and_lock<'a>(
 
 /// Kirim token dari akun kurva ke pembeli. Ditandatangani PDA.
 #[allow(clippy::too_many_arguments)]
-pub fn transfer_from_curve<'a>(
+pub fn transfer_out<'a>(
     program_id: &Pubkey,
     mint: &AccountInfo<'a>,
     from: &AccountInfo<'a>,
@@ -190,8 +215,8 @@ pub fn transfer_from_curve<'a>(
     if amount == 0 {
         return Ok(());
     }
-    let bump = assert_mint_authority(program_id, mint.key, mint_authority)?;
-    let seeds: &[&[u8]] = &[MINT_AUTHORITY_SEED, mint.key.as_array(), &[bump]];
+    let bump = assert_authority(program_id, mint.key, mint_authority)?;
+    let seeds: &[&[u8]] = &[AUTHORITY_SEED, mint.key.as_array(), &[bump]];
 
     // transfer_checked, bukan transfer: ia memverifikasi mint dan desimal,
     // jadi akun token dengan mint yang salah tidak bisa diselipkan.
@@ -219,7 +244,7 @@ pub fn transfer_from_curve<'a>(
 
 /// Terima token dari penjual kembali ke akun kurva. Penjual menandatangani.
 #[allow(clippy::too_many_arguments)]
-pub fn transfer_to_curve<'a>(
+pub fn transfer_in<'a>(
     mint: &AccountInfo<'a>,
     from: &AccountInfo<'a>,
     to: &AccountInfo<'a>,
@@ -255,7 +280,7 @@ pub fn transfer_to_curve<'a>(
 }
 
 /// Burn token. Dipakai untuk alokasi kreator yang hangus saat abandonment.
-pub fn burn_from_curve<'a>(
+pub fn burn_from_vault<'a>(
     program_id: &Pubkey,
     mint: &AccountInfo<'a>,
     from: &AccountInfo<'a>,
@@ -266,8 +291,8 @@ pub fn burn_from_curve<'a>(
     if amount == 0 {
         return Ok(());
     }
-    let bump = assert_mint_authority(program_id, mint.key, mint_authority)?;
-    let seeds: &[&[u8]] = &[MINT_AUTHORITY_SEED, mint.key.as_array(), &[bump]];
+    let bump = assert_authority(program_id, mint.key, mint_authority)?;
+    let seeds: &[&[u8]] = &[AUTHORITY_SEED, mint.key.as_array(), &[bump]];
 
     invoke_signed(
         &token::instruction::burn(
