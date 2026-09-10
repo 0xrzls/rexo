@@ -1,7 +1,15 @@
 // Copyright (c) 2026 Rexo
 // SPDX-License-Identifier: Apache-2.0
 
-//! Pemindahan RLO (kelvin) masuk dan keluar vault PDA.
+//! Pemindahan RLO (kelvin) masuk dan keluar vault quote.
+//!
+//! v2 memisahkan vault: `quote_vault` memegang RLO, `base_vault` memegang
+//! token (dikelola `token.rs`). LaunchLab dan DBC keduanya melakukan ini —
+//! satu vault per aset membuat audit saldo jauh lebih sederhana.
+//!
+//! Vault kreator dari v1 DIHAPUS. Fee sekarang menumpuk di `quote_vault`
+//! dan dicatat di `FeeLedger`, ditarik saat diminta. Tidak ada lagi
+//! transfer fee per perdagangan.
 //!
 //! # Dua arah, dua mekanisme berbeda
 //!
@@ -24,35 +32,12 @@ use rialo_s_program::{
     system_program, sysvar::Sysvar,
 };
 
-use crate::constants::{CREATOR_VAULT_SEED, VAULT_SEED};
+use crate::config::QUOTE_VAULT_SEED;
 use crate::errors::RexoError;
 
 /// Turunkan alamat vault untuk sebuah mint.
-pub fn derive_vault(program_id: &Pubkey, mint: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[VAULT_SEED, mint.as_array()], program_id)
-}
-
-/// Turunkan alamat creator_vault untuk seorang kreator (Lubang 7.2).
-pub fn derive_creator_vault(program_id: &Pubkey, creator: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[CREATOR_VAULT_SEED, creator.as_array()], program_id)
-}
-
-/// Pastikan akun creator_vault yang dikirim benar-benar PDA yang kita harapkan.
-pub fn assert_creator_vault(
-    program_id: &Pubkey,
-    creator: &Pubkey,
-    creator_vault: &AccountInfo<'_>,
-) -> Result<u8, ProgramError> {
-    let (expected, bump) = derive_creator_vault(program_id, creator);
-    if expected != *creator_vault.key {
-        msg!(
-            "creator_vault mismatch: got {} expected {}",
-            creator_vault.key,
-            expected
-        );
-        return Err(RexoError::InvalidVault.into());
-    }
-    Ok(bump)
+pub fn derive_quote_vault(program_id: &Pubkey, launch: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[QUOTE_VAULT_SEED, launch.as_array()], program_id)
 }
 
 /// Pastikan akun vault yang dikirim benar-benar PDA yang kita harapkan.
@@ -60,12 +45,12 @@ pub fn assert_creator_vault(
 /// Tanpa cek ini, penyerang bisa mengirim akun miliknya sendiri sebagai
 /// "vault" dan menarik seluruh hasil kurva. Ini kelas bug paling umum di
 /// program bergaya Solana.
-pub fn assert_vault(
+pub fn assert_quote_vault(
     program_id: &Pubkey,
-    mint: &Pubkey,
+    launch: &Pubkey,
     vault: &AccountInfo<'_>,
 ) -> Result<u8, ProgramError> {
-    let (expected, bump) = derive_vault(program_id, mint);
+    let (expected, bump) = derive_quote_vault(program_id, launch);
     if expected != *vault.key {
         msg!(
             "vault mismatch: got {} expected {}",
@@ -82,9 +67,9 @@ pub fn assert_vault(
 }
 
 /// Buat vault kalau belum ada. Idempoten.
-pub fn ensure_vault<'a>(
+pub fn ensure_quote_vault<'a>(
     program_id: &Pubkey,
-    mint: &Pubkey,
+    launch: &Pubkey,
     payer: &AccountInfo<'a>,
     vault: &AccountInfo<'a>,
     system_program_account: &AccountInfo<'a>,
@@ -92,7 +77,7 @@ pub fn ensure_vault<'a>(
     if !system_program::check_id(system_program_account.key) {
         return Err(ProgramError::IncorrectProgramId);
     }
-    let (expected, bump) = derive_vault(program_id, mint);
+    let (expected, bump) = derive_quote_vault(program_id, launch);
     if expected != *vault.key {
         return Err(RexoError::InvalidVault.into());
     }
@@ -106,7 +91,7 @@ pub fn ensure_vault<'a>(
     let rent = Rent::get()?;
     let lamports = rent.minimum_balance(space);
 
-    let seeds: &[&[u8]] = &[VAULT_SEED, mint.as_array(), &[bump]];
+    let seeds: &[&[u8]] = &[QUOTE_VAULT_SEED, launch.as_array(), &[bump]];
     rialo_s_program::program::invoke_signed(
         &system_instruction::create_account(
             payer.key,
@@ -119,53 +104,6 @@ pub fn ensure_vault<'a>(
         &[seeds],
     )?;
     msg!("vault {} created with {} kelvin rent", vault.key, lamports);
-    Ok(())
-}
-
-/// Buat creator_vault kalau belum ada. Idempoten (Tambalan Lubang 7.2).
-///
-/// Tanpa akun ini, penarikan fee kreator via manipulasi saldo langsung
-/// akan menghasilkan akun kosong tanpa alokasi yang rawan disapu jaringan.
-pub fn ensure_creator_vault<'a>(
-    program_id: &Pubkey,
-    creator: &Pubkey,
-    payer: &AccountInfo<'a>,
-    creator_vault: &AccountInfo<'a>,
-    system_program_account: &AccountInfo<'a>,
-) -> ProgramResult {
-    if !system_program::check_id(system_program_account.key) {
-        return Err(ProgramError::IncorrectProgramId);
-    }
-    let (expected, bump) = derive_creator_vault(program_id, creator);
-    if expected != *creator_vault.key {
-        return Err(RexoError::InvalidVault.into());
-    }
-    if creator_vault.kelvins() > 0 {
-        return Ok(()); // sudah ada
-    }
-
-    let space: usize = 1;
-    let rent = Rent::get()?;
-    let lamports = rent.minimum_balance(space);
-
-    let seeds: &[&[u8]] = &[CREATOR_VAULT_SEED, creator.as_array(), &[bump]];
-    rialo_s_program::program::invoke_signed(
-        &system_instruction::create_account(
-            payer.key,
-            creator_vault.key,
-            lamports,
-            space as u64,
-            program_id,
-        ),
-        &[payer.clone(), creator_vault.clone(), system_program_account.clone()],
-        &[seeds],
-    )?;
-    msg!(
-        "creator_vault {} created with {} kelvin rent for creator {}",
-        creator_vault.key,
-        lamports,
-        creator
-    );
     Ok(())
 }
 
