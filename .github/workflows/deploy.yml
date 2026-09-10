@@ -234,6 +234,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_contract }}
     runs-on: ubuntu-22.04
     environment: ${{ inputs.network }}
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -312,12 +314,48 @@ jobs:
           echo "Deploying binary artifact: ${POLKAVM_PATH}"
           rialo client program deploy -n ${{ inputs.network }} "${POLKAVM_PATH}" 2>&1 | tee /tmp/deploy.log
           
-          # Ekstrak Program ID
-          PROGRAM_ID=$(grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}' /tmp/deploy.log | head -1 || true)
+          # Ekstrak Signature transaksi deploy secara deterministik dari output
+          # Signature berupa base58 86-90 karakter
+          SIG=$(grep -oE '[1-9A-HJ-NP-Za-km-z]{86,90}' /tmp/deploy.log | head -1 || true)
+          if [ -z "${SIG}" ]; then
+            SIG=$(grep -i "signature" /tmp/deploy.log | grep -oE '[1-9A-HJ-NP-Za-km-z]{80,95}' | head -1 || true)
+          fi
+
+          PROGRAM_ID=""
+          if [ -n "${SIG}" ]; then
+            echo "Transaksi deploy berhasil disiarkan dengan signature: ${SIG}"
+            echo "Mengambil rincian transaksi on-chain untuk mengekstrak Program ID..."
+            rialo client transaction -n ${{ inputs.network }} --json "${SIG}" > /tmp/tx.json || true
+            PROGRAM_ID=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('/tmp/tx.json'))
+    tx = data.get('result', data).get('transaction', {}).get('message', {})
+    ix = tx['instructions'][0]
+    # Instruksi Deploy merujuk akun program di accounts[0]
+    prog_id = tx['account_keys'][ix['accounts'][0]]
+    print(prog_id)
+except Exception as e:
+    sys.exit(1)
+" 2>/dev/null || true)
+          fi
+
+          # Fallback jika rialo CLI sudah langsung mencetak Program Id di log
           if [ -z "${PROGRAM_ID}" ]; then
-            echo "::error::Tidak berhasil mengekstrak Program ID dari output deploy."
+            PROGRAM_ID=$(python3 -c "
+import re, sys
+lines = open('/tmp/deploy.log').read()
+m = re.search(r'Program Id:\s*([1-9A-HJ-NP-Za-km-z]{32,44})', lines, re.IGNORECASE)
+if m:
+    print(m.group(1))
+" 2>/dev/null || true)
+          fi
+
+          if [ -z "${PROGRAM_ID}" ]; then
+            echo "::error::Tidak berhasil mengekstrak Program ID dari transaksi deploy."
             exit 1
           fi
+
           echo "PROGRAM_ID=${PROGRAM_ID}" >> $GITHUB_ENV
           echo "Deployed Program ID: ${PROGRAM_ID}"
 
@@ -401,6 +439,64 @@ jobs:
                   sf.write(f"- **SHA-256 Payload**: `{onchain_sha}`\n")
                   sf.write(f"\nProgram `{program_id}` aktif dan siap digunakan di Rialo DevNet!\n")
           EOF
+
+      # -------------------------------------------------------------------
+      # Otomatis Ganti & Simpan Artefak Deployment Baru (Auto-Commit & Update Manifest)
+      # -------------------------------------------------------------------
+      - name: Auto-Update & Replace Stale Deployment Manifest
+        if: success()
+        run: |
+          set -euo pipefail
+          echo "Menyimpan metadata deployment baru dan menggantikan artefak lama..."
+          
+          python3 - << 'EOF'
+          import json, os, datetime
+
+          program_id = os.environ.get('PROGRAM_ID', '').strip()
+          network = "${{ inputs.network }}"
+          run_number = os.environ.get('GITHUB_RUN_NUMBER', '0')
+          loader = "RiscVLoader11111111111111111111111111111111"
+
+          # 1. Update data/deployed_program.json
+          os.makedirs('data', exist_ok=True)
+          deploy_info = {
+              "programId": program_id,
+              "network": network,
+              "loader": loader,
+              "executable": True,
+              "deployedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "runNumber": int(run_number) if run_number.isdigit() else 0,
+              "replacedPrevious": True
+          }
+          with open('data/deployed_program.json', 'w') as f:
+              json.dump(deploy_info, f, indent=2)
+
+          # 2. Update contracts/rexo-core/artifacts/manifest.json
+          manifest_path = 'contracts/rexo-core/artifacts/manifest.json'
+          if os.path.exists(manifest_path):
+              with open(manifest_path, 'r') as f:
+                  manifest = json.load(f)
+              manifest['programId'] = program_id
+              manifest['network'] = network
+              manifest['loader'] = loader
+              manifest['deployedAt'] = deploy_info['deployedAt']
+              with open(manifest_path, 'w') as f:
+                  json.dump(manifest, f, indent=2)
+              print(f"manifest.json berhasil diperbarui dengan Program ID baru: {program_id}")
+
+          print("Deployment metadata otomatis diperbarui.")
+          EOF
+
+          # 3. Commit dan push ke repository agar artefak lama tergantikan secara otomatis
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/deployed_program.json contracts/rexo-core/artifacts/manifest.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(deploy): auto-replace deployed program with ${PROGRAM_ID} (run #${{ github.run_number }}) [skip ci]"
+            git push origin ${{ github.ref_name }} || echo "::warning::Gagal auto-push manifest ke repo (izin token workflow mungkin butuh contents: write)."
+          else
+            echo "Tidak ada perubahan file manifest (sudah mutakhir)."
+          fi
 
       - name: Wipe Keypair
         if: always()
