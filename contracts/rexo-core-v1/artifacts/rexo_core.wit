@@ -1,0 +1,84 @@
+package rexo:core@0.12.2;
+
+/// Rexo Core — Canonical Meme Launchpad Engine for Rialo Venus
+world rexo-launchpad {
+    /// Account Public Key (32-byte Ed25519)
+    type pubkey = list<u8>;
+
+    /// Launchpad Tier: 0 = Degan (Unverified), 1 = Community (Verified Socials), 2 = Committed (Skin-in-the-game Bond)
+    enum tier-type {
+        degan,
+        community,
+        committed,
+    }
+
+    /// Pool Lifecycle Status: 0 = Active, 1 = SealedBatch, 2 = Graduated, 3 = Abandoned, 4 = Cancelled
+    enum pool-status {
+        active,
+        sealed-batch,
+        graduated,
+        abandoned,
+        cancelled,
+    }
+
+    /// Pool State Struct
+    record pool-state {
+        creator: pubkey,
+        mint: pubkey,
+        treasury: pubkey,
+        name: string,
+        symbol: string,
+        metadata-uri: string,
+        tier: u8,
+        status: u8,
+        created-at: u64,
+        virtual-quote: u64,
+        virtual-token: u64,
+        real-quote: u64,
+        real-token: u64,
+        fees-protocol: u64,
+        fees-creator: u64,
+        bond: u64,
+        heartbeat-count: u64,
+        heartbeat-failures: u32,
+    }
+
+    /// Launch instruction: Initialize pool, transfer bond, lock initial token reserves
+    export launch: func(
+        name: string,
+        symbol: string,
+        metadata-uri: string,
+        telegram: string,
+        x-handle: string,
+        initial-buy: u64,
+        bond-deposit: u64
+    ) -> result<pubkey, string>;
+
+    /// Buy instruction: Constant-product AMM bonding curve purchase
+    export buy: func(
+        quote-in-kelvins: u64,
+        min-tokens-out: u64
+    ) -> result<u64, string>;
+
+    /// Sell instruction: Sell meme tokens back to curve vault for RLO Kelvins
+    export sell: func(
+        tokens-in: u64,
+        min-quote-out: u64
+    ) -> result<u64, string>;
+
+    /// Autonomous liveness tick scheduled via Venus AFTER directive
+    export on-heartbeat: func() -> result<bool, string>;
+
+    /// Attestation by REX / Edge enclave validator
+    export apply-verification: func(
+        tier: u8,
+        telegram-members: u64,
+        x-account-age-days: u64
+    ) -> result<bool, string>;
+
+    /// Graduate curve to AMM DEX Liquidity Pool
+    export graduate: func() -> result<pubkey, string>;
+
+    /// Emergency / Breaker abandonment
+    export abandon: func(reason: u8) -> result<bool, string>;
+}
