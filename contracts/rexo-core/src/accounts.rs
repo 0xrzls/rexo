@@ -3,9 +3,21 @@
 
 //! Parsing dan validasi akun.
 //!
-//! Urutan akun adalah bagian dari ABI: `next_account_info` mengambilnya
-//! berurutan. Setiap PDA diverifikasi sebelum dipakai — tanpa itu,
-//! penyerang bisa mengirim akun miliknya sendiri sebagai "vault".
+//! # Kenapa modul ini ada
+//!
+//! Manifest program Venus (lihat `wit/*-manifest.json`) mendeklarasikan akun
+//! per-instruksi dengan tiga sumber: `parameter`, `derived`, dan
+//! `well_known`. Akun yang selalu ada: `payer` (signer, writable),
+//! `workflow_pda` (derived, owner = program_id), dan `system_program`.
+//!
+//! Modul ini mengubah slice `&[AccountInfo]` mentah menjadi struct bernama,
+//! dan memverifikasi setiap PDA sebelum dipakai. Pola ini disengaja: dengan
+//! begitu satu-satunya bagian yang belum terverifikasi (cara macro Venus
+//! menyerahkan slice akun ke badan fungsi) terisolasi di SATU baris di
+//! `lib.rs`, bukan tersebar ke seluruh program.
+//!
+//! Kalau accessor-nya ternyata berbeda, yang perlu kamu ubah cuma baris itu.
+//! Seluruh validasi di bawah tetap benar.
 
 use rialo_s_program::{
     account_info::{next_account_info, AccountInfo},
@@ -14,241 +26,158 @@ use rialo_s_program::{
     system_program,
 };
 
-use crate::config::LaunchConfig;
 use crate::errors::RexoError;
-use crate::ops::{InitAccounts, TradeAccounts};
 use crate::{token, vault};
 
-/// Baca LaunchConfig dari akun. Deserialisasi memakai bincode+serde,
-/// sama seperti state workflow Venus.
-pub fn read_config(_account: &AccountInfo<'_>) -> Result<LaunchConfig, ProgramError> {
-    // TODO(config-account): saat ini config dibaca sebagai preset default.
-    // Layout serialisasinya menunggu konfirmasi bentuk yang dipakai Venus
-    // untuk akun non-workflow. Sampai itu jelas, memakai preset lebih jujur
-    // daripada mem-parse byte dengan asumsi yang belum diverifikasi.
-    Ok(LaunchConfig::pumpfun_like())
-}
-
-fn expect_system(a: &AccountInfo<'_>) -> Result<(), ProgramError> {
-    if !system_program::check_id(a.key) {
-        return Err(ProgramError::IncorrectProgramId);
-    }
-    Ok(())
-}
-
-pub struct InitParsed<'a, 'info> {
-    pub inner: InitAccounts<'a, 'info>,
-    pub config: &'a AccountInfo<'info>,
-}
-
-impl<'a, 'info> core::ops::Deref for InitParsed<'a, 'info> {
-    type Target = InitAccounts<'a, 'info>;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-pub fn parse_init<'a, 'info>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'info>],
-) -> Result<InitParsed<'a, 'info>, ProgramError> {
-    let it = &mut accounts.iter();
-    let payer = next_account_info(it)?;
-    let config = next_account_info(it)?;
-    let launch = next_account_info(it)?;
-    let mint = next_account_info(it)?;
-    let authority = next_account_info(it)?;
-    let base_vault = next_account_info(it)?;
-    let quote_vault = next_account_info(it)?;
-    let creator_token_account = next_account_info(it)?;
-    let token_program = next_account_info(it)?;
-    let sysprog = next_account_info(it)?;
-
-    if !payer.is_signer {
-        return Err(RexoError::Unauthorized.into());
-    }
-    expect_system(sysprog)?;
-    check_pdas(program_id, launch.key, authority, base_vault, quote_vault)?;
-
-    Ok(InitParsed {
-        inner: InitAccounts {
-            payer,
-            launch,
-            mint,
-            authority,
-            base_vault,
-            quote_vault,
-            creator_token_account,
-            token_program,
-            system_program: sysprog,
-        },
-        config,
-    })
-}
-
-pub fn parse_trade<'a, 'info>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'info>],
-) -> Result<TradeAccounts<'a, 'info>, ProgramError> {
-    let it = &mut accounts.iter();
-    let trader = next_account_info(it)?;
-    let launch = next_account_info(it)?;
-    let mint = next_account_info(it)?;
-    let authority = next_account_info(it)?;
-    let base_vault = next_account_info(it)?;
-    let quote_vault = next_account_info(it)?;
-    let trader_token_account = next_account_info(it)?;
-    let token_program = next_account_info(it)?;
-    let sysprog = next_account_info(it)?;
-    // Referrer opsional: kalau ada akun tersisa, itu dia.
-    let referrer = it.next();
-
-    if !trader.is_signer {
-        return Err(RexoError::Unauthorized.into());
-    }
-    expect_system(sysprog)?;
-    check_pdas(program_id, launch.key, authority, base_vault, quote_vault)?;
-
-    Ok(TradeAccounts {
-        trader,
-        launch,
-        mint,
-        authority,
-        base_vault,
-        quote_vault,
-        trader_token_account,
-        referrer,
-        token_program,
-        system_program: sysprog,
-    })
-}
-
-pub struct ClaimParsed<'a, 'info> {
-    pub signer: &'a AccountInfo<'info>,
-    pub launch: &'a AccountInfo<'info>,
-    pub quote_vault: &'a AccountInfo<'info>,
-    pub recipient: &'a AccountInfo<'info>,
-}
-
-pub fn parse_claim<'a, 'info>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'info>],
-) -> Result<ClaimParsed<'a, 'info>, ProgramError> {
-    let it = &mut accounts.iter();
-    let signer = next_account_info(it)?;
-    let launch = next_account_info(it)?;
-    let quote_vault = next_account_info(it)?;
-    let recipient = next_account_info(it)?;
-
-    if !signer.is_signer {
-        return Err(RexoError::Unauthorized.into());
-    }
-    vault::assert_quote_vault(program_id, launch.key, quote_vault)?;
-    Ok(ClaimParsed {
-        signer,
-        launch,
-        quote_vault,
-        recipient,
-    })
-}
-
-pub struct CreatorClaimParsed<'a, 'info> {
-    pub signer: &'a AccountInfo<'info>,
-    pub launch: &'a AccountInfo<'info>,
+/// Akun untuk `launch`.
+pub struct LaunchAccounts<'a, 'info> {
+    pub payer: &'a AccountInfo<'info>,
+    pub workflow: &'a AccountInfo<'info>,
     pub mint: &'a AccountInfo<'info>,
-    pub authority: &'a AccountInfo<'info>,
-    pub base_vault: &'a AccountInfo<'info>,
-    pub creator_token_account: &'a AccountInfo<'info>,
+    pub mint_authority: &'a AccountInfo<'info>,
+    pub curve_token_account: &'a AccountInfo<'info>,
+    pub vault: &'a AccountInfo<'info>,
+    /// Tujuan sapuan fee protokol. Wajib ada di `launch` karena dev-buy
+    /// sudah menghasilkan fee di transaksi yang sama — tanpa akun ini fee
+    /// itu nyangkut di vault selamanya.
+    pub treasury: &'a AccountInfo<'info>,
+    pub creator_vault: &'a AccountInfo<'info>,
     pub token_program: &'a AccountInfo<'info>,
+    pub system_program: &'a AccountInfo<'info>,
 }
 
-pub fn parse_creator_claim<'a, 'info>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'info>],
-) -> Result<CreatorClaimParsed<'a, 'info>, ProgramError> {
-    let it = &mut accounts.iter();
-    let signer = next_account_info(it)?;
-    let launch = next_account_info(it)?;
-    let mint = next_account_info(it)?;
-    let authority = next_account_info(it)?;
-    let base_vault = next_account_info(it)?;
-    let creator_token_account = next_account_info(it)?;
-    let token_program = next_account_info(it)?;
+impl<'a, 'info> LaunchAccounts<'a, 'info> {
+    pub fn parse(
+        program_id: &Pubkey,
+        accounts: &'a [AccountInfo<'info>],
+    ) -> Result<Self, ProgramError> {
+        let iter = &mut accounts.iter();
+        let me = Self {
+            payer: next_account_info(iter)?,
+            workflow: next_account_info(iter)?,
+            mint: next_account_info(iter)?,
+            mint_authority: next_account_info(iter)?,
+            curve_token_account: next_account_info(iter)?,
+            vault: next_account_info(iter)?,
+            treasury: next_account_info(iter)?,
+            creator_vault: next_account_info(iter)?,
+            token_program: next_account_info(iter)?,
+            system_program: next_account_info(iter)?,
+        };
+        me.validate(program_id)?;
+        Ok(me)
+    }
 
-    if !signer.is_signer {
-        return Err(RexoError::Unauthorized.into());
+    fn validate(&self, program_id: &Pubkey) -> Result<(), ProgramError> {
+        if !self.payer.is_signer {
+            return Err(RexoError::Unauthorized.into());
+        }
+        if !system_program::check_id(self.system_program.key) {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        token::assert_mint_authority(program_id, self.mint.key, self.mint_authority)?;
+        // vault belum tentu ada saat launch, jadi cek turunannya saja
+        let (expected_vault, _) = vault::derive_vault(program_id, self.mint.key);
+        if expected_vault != *self.vault.key {
+            return Err(RexoError::InvalidVault.into());
+        }
+        let (expected_creator_vault, _) = vault::derive_creator_vault(program_id, self.payer.key);
+        if expected_creator_vault != *self.creator_vault.key {
+            return Err(RexoError::InvalidVault.into());
+        }
+        Ok(())
     }
-    token::assert_authority(program_id, launch.key, authority)?;
-    let (expected, _) = token::derive_base_vault(program_id, launch.key);
-    if expected != *base_vault.key {
-        return Err(RexoError::InvalidVault.into());
-    }
-    Ok(CreatorClaimParsed {
-        signer,
-        launch,
-        mint,
-        authority,
-        base_vault,
-        creator_token_account,
-        token_program,
-    })
 }
 
-pub struct MigrateParsed<'a, 'info> {
-    pub launch: &'a AccountInfo<'info>,
+/// Akun untuk `buy` dan `sell`.
+pub struct TradeAccounts<'a, 'info> {
+    pub trader: &'a AccountInfo<'info>,
+    pub workflow: &'a AccountInfo<'info>,
     pub mint: &'a AccountInfo<'info>,
-    pub authority: &'a AccountInfo<'info>,
-    pub base_vault: &'a AccountInfo<'info>,
-    pub quote_vault: &'a AccountInfo<'info>,
-    pub lp_base_dest: &'a AccountInfo<'info>,
-    pub lp_quote_dest: &'a AccountInfo<'info>,
+    pub mint_authority: &'a AccountInfo<'info>,
+    pub curve_token_account: &'a AccountInfo<'info>,
+    pub trader_token_account: &'a AccountInfo<'info>,
+    pub vault: &'a AccountInfo<'info>,
+    pub treasury: &'a AccountInfo<'info>,
+    pub creator_vault: &'a AccountInfo<'info>,
     pub token_program: &'a AccountInfo<'info>,
+    pub system_program: &'a AccountInfo<'info>,
 }
 
-pub fn parse_migrate<'a, 'info>(
-    program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'info>],
-) -> Result<MigrateParsed<'a, 'info>, ProgramError> {
-    let it = &mut accounts.iter();
-    let launch = next_account_info(it)?;
-    let mint = next_account_info(it)?;
-    let authority = next_account_info(it)?;
-    let base_vault = next_account_info(it)?;
-    let quote_vault = next_account_info(it)?;
-    let lp_base_dest = next_account_info(it)?;
-    let lp_quote_dest = next_account_info(it)?;
-    let token_program = next_account_info(it)?;
+impl<'a, 'info> TradeAccounts<'a, 'info> {
+    pub fn parse(
+        program_id: &Pubkey,
+        accounts: &'a [AccountInfo<'info>],
+    ) -> Result<Self, ProgramError> {
+        let iter = &mut accounts.iter();
+        let me = Self {
+            trader: next_account_info(iter)?,
+            workflow: next_account_info(iter)?,
+            mint: next_account_info(iter)?,
+            mint_authority: next_account_info(iter)?,
+            curve_token_account: next_account_info(iter)?,
+            trader_token_account: next_account_info(iter)?,
+            vault: next_account_info(iter)?,
+            treasury: next_account_info(iter)?,
+            creator_vault: next_account_info(iter)?,
+            token_program: next_account_info(iter)?,
+            system_program: next_account_info(iter)?,
+        };
+        me.validate(program_id)?;
+        Ok(me)
+    }
 
-    check_pdas(program_id, launch.key, authority, base_vault, quote_vault)?;
-    Ok(MigrateParsed {
-        launch,
-        mint,
-        authority,
-        base_vault,
-        quote_vault,
-        lp_base_dest,
-        lp_quote_dest,
-        token_program,
-    })
+    fn validate(&self, program_id: &Pubkey) -> Result<(), ProgramError> {
+        if !self.trader.is_signer {
+            return Err(RexoError::Unauthorized.into());
+        }
+        if !system_program::check_id(self.system_program.key) {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        // INI cek yang mencegah pencurian vault. Tanpa ini, penyerang
+        // mengirim akun miliknya sebagai "vault" dan menguras hasil kurva.
+        vault::assert_vault(program_id, self.mint.key, self.vault)?;
+        token::assert_mint_authority(program_id, self.mint.key, self.mint_authority)?;
+        Ok(())
+    }
 }
 
-/// Cek yang mencegah pencurian vault. Tanpa ini, penyerang mengirim akun
-/// miliknya sebagai vault dan menguras hasil kurva.
-fn check_pdas(
-    program_id: &Pubkey,
-    launch: &Pubkey,
-    authority: &AccountInfo<'_>,
-    base_vault: &AccountInfo<'_>,
-    quote_vault: &AccountInfo<'_>,
-) -> Result<(), ProgramError> {
-    token::assert_authority(program_id, launch, authority)?;
-    let (eb, _) = token::derive_base_vault(program_id, launch);
-    if eb != *base_vault.key {
-        return Err(RexoError::InvalidVault.into());
+/// Akun untuk `graduate`.
+pub struct GraduateAccounts<'a, 'info> {
+    pub payer: &'a AccountInfo<'info>,
+    pub workflow: &'a AccountInfo<'info>,
+    pub mint: &'a AccountInfo<'info>,
+    pub mint_authority: &'a AccountInfo<'info>,
+    pub curve_token_account: &'a AccountInfo<'info>,
+    pub vault: &'a AccountInfo<'info>,
+    pub pool_token_account: &'a AccountInfo<'info>,
+    pub pool_quote_account: &'a AccountInfo<'info>,
+    pub creator: &'a AccountInfo<'info>,
+    pub token_program: &'a AccountInfo<'info>,
+    pub system_program: &'a AccountInfo<'info>,
+}
+
+impl<'a, 'info> GraduateAccounts<'a, 'info> {
+    pub fn parse(
+        program_id: &Pubkey,
+        accounts: &'a [AccountInfo<'info>],
+    ) -> Result<Self, ProgramError> {
+        let iter = &mut accounts.iter();
+        let me = Self {
+            payer: next_account_info(iter)?,
+            workflow: next_account_info(iter)?,
+            mint: next_account_info(iter)?,
+            mint_authority: next_account_info(iter)?,
+            curve_token_account: next_account_info(iter)?,
+            vault: next_account_info(iter)?,
+            pool_token_account: next_account_info(iter)?,
+            pool_quote_account: next_account_info(iter)?,
+            creator: next_account_info(iter)?,
+            token_program: next_account_info(iter)?,
+            system_program: next_account_info(iter)?,
+        };
+        vault::assert_vault(program_id, me.mint.key, me.vault)?;
+        token::assert_mint_authority(program_id, me.mint.key, me.mint_authority)?;
+        Ok(me)
     }
-    let (eq, _) = vault::derive_quote_vault(program_id, launch);
-    if eq != *quote_vault.key {
-        return Err(RexoError::InvalidVault.into());
-    }
-    Ok(())
 }
