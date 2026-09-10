@@ -1,117 +1,122 @@
 {
   "name": "rexo-core",
-  "version": "0.12.2",
-  "description": "Canonical Meme Coin Launchpad Engine for Rialo Venus",
+  "version": "0.2.0",
+  "description": "Canonical Meme Coin Launchpad Engine for Rialo Venus — v2 Config-Driven & Pull-Fee Architecture",
   "target": "riscv32emc-unknown-none-polkavm",
   "programId": "FZcEyNcWaWUt9njVp6eJYmJnArMcVSQtMevsVJYZLg89",
   "loader": "RiscVLoader11111111111111111111111111111111",
-  "network": "rialo-devnet",
+  "network": "devnet",
   "sha256": "00d2b5fcb8b6102b3dc140cda2f3aeb30cb4929d7df3e07722a607ecc8846f56",
   "modules": [
     "lib.rs",
+    "config.rs",
     "curve.rs",
+    "fees.rs",
+    "ops.rs",
+    "state.rs",
+    "accounts.rs",
     "token.rs",
     "vault.rs",
-    "accounts.rs",
-    "hooks.rs",
-    "state.rs",
-    "guards.rs",
-    "constants.rs",
-    "ops.rs",
-    "events.rs",
     "errors.rs"
   ],
-  "invariants": {
-    "virtualQuoteKelvins": 30000000000,
-    "virtualTokenSupply": 1073000000000000,
-    "curveTokenSupply": 793100000000000,
-    "graduationTokenReserve": 206900000000000,
-    "graduationTargetKelvins": 85000000000,
-    "feeProtocolBasisPoints": 50,
-    "feeCreatorBasisPoints": 50
+  "architecture": {
+    "version": "v2",
+    "curveModel": "Configurable (Preset / Linear / Multi-segment 16-point)",
+    "feeModel": "FeeLedger Pull Pattern (claim_protocol, claim_partner, claim_creator)",
+    "vaultModel": "Dual Vault (base_vault PDA + quote_vault PDA)",
+    "autoMigration": "Rialo Venus Reactive AFTER 1s CALL [migrate]"
   },
   "exportedFunctions": [
-    "launch",
-    "buy",
-    "sell",
-    "on_heartbeat",
-    "apply_verification",
-    "settle_sealed_batch",
-    "distribute_fills",
-    "graduate",
-    "abandon"
+    "initialize",
+    "buy_exact_in",
+    "buy_exact_out",
+    "sell_exact_in",
+    "sell_exact_out",
+    "claim_protocol_fee",
+    "claim_partner_fee",
+    "claim_creator_fee",
+    "claim_creator_tokens",
+    "migrate",
+    "get_state"
   ],
   "instructions": [
     {
-      "name": "launch",
+      "name": "initialize",
       "discriminant": 0,
-      "accounts": [
-        "payer",
-        "workflow",
-        "mint",
-        "mint_authority",
-        "curve_token_account",
-        "vault",
-        "treasury",
-        "creator_vault",
-        "token_program",
-        "system_program"
-      ],
-      "args": ["creator", "mint", "treasury", "name", "symbol", "metadata_uri", "telegram_handle", "x_handle", "bond", "dev_buy"]
+      "description": "Luncurkan token baru dengan parameter kurva dan fee dari LaunchConfig",
+      "accounts": ["payer", "config", "launch", "mint", "base_vault", "quote_vault", "token_program", "system_program"],
+      "args": ["partner", "creator", "mint", "protocol_treasury", "name", "symbol", "metadata_uri", "creator_buy"]
     },
     {
-      "name": "buy",
+      "name": "buy_exact_in",
       "discriminant": 1,
-      "accounts": [
-        "trader",
-        "workflow",
-        "mint",
-        "mint_authority",
-        "curve_token_account",
-        "trader_token_account",
-        "vault",
-        "treasury",
-        "creator_vault",
-        "token_program",
-        "system_program"
-      ],
-      "args": ["quote_in", "min_tokens_out"]
+      "description": "Beli token dengan jumlah quote tepat, slippage proteksi min_base_out",
+      "accounts": ["trader", "launch", "base_vault", "quote_vault", "trader_token_account", "referrer_quote_account", "token_program", "system_program"],
+      "args": ["quote_in", "min_base_out"]
     },
     {
-      "name": "sell",
+      "name": "buy_exact_out",
       "discriminant": 2,
-      "accounts": [
-        "trader",
-        "workflow",
-        "mint",
-        "mint_authority",
-        "curve_token_account",
-        "trader_token_account",
-        "vault",
-        "treasury",
-        "creator_vault",
-        "token_program",
-        "system_program"
-      ],
-      "args": ["tokens_in", "min_quote_out"]
+      "description": "Beli token dengan target jumlah base tepat, batasan max_quote_in",
+      "accounts": ["trader", "launch", "base_vault", "quote_vault", "trader_token_account", "referrer_quote_account", "token_program", "system_program"],
+      "args": ["base_out", "max_quote_in"]
     },
     {
-      "name": "graduate",
+      "name": "sell_exact_in",
       "discriminant": 3,
-      "accounts": [
-        "payer",
-        "workflow",
-        "mint",
-        "mint_authority",
-        "curve_token_account",
-        "vault",
-        "pool_token_account",
-        "pool_quote_account",
-        "creator",
-        "token_program",
-        "system_program"
-      ],
+      "description": "Jual token dengan jumlah base tepat, slippage proteksi min_quote_out",
+      "accounts": ["trader", "launch", "base_vault", "quote_vault", "trader_token_account", "referrer_quote_account", "token_program", "system_program"],
+      "args": ["base_in", "min_quote_out"]
+    },
+    {
+      "name": "sell_exact_out",
+      "discriminant": 4,
+      "description": "Jual token untuk mendapatkan target quote tepat, batasan max_base_in",
+      "accounts": ["trader", "launch", "base_vault", "quote_vault", "trader_token_account", "referrer_quote_account", "token_program", "system_program"],
+      "args": ["quote_out", "max_base_in"]
+    },
+    {
+      "name": "claim_protocol_fee",
+      "discriminant": 5,
+      "description": "Tarik akumulasi fee protokol dari quote_vault ke treasury",
+      "accounts": ["authority", "launch", "quote_vault", "treasury_account", "token_program"],
+      "args": []
+    },
+    {
+      "name": "claim_partner_fee",
+      "discriminant": 6,
+      "description": "Tarik akumulasi fee partner (launchpad operator) dari quote_vault",
+      "accounts": ["authority", "launch", "quote_vault", "partner_account", "token_program"],
+      "args": []
+    },
+    {
+      "name": "claim_creator_fee",
+      "discriminant": 7,
+      "description": "Tarik akumulasi fee creator dari quote_vault",
+      "accounts": ["authority", "launch", "quote_vault", "creator_account", "token_program"],
+      "args": []
+    },
+    {
+      "name": "claim_creator_tokens",
+      "discriminant": 8,
+      "description": "Klaim vested token kreator setelah migrasi selesai",
+      "accounts": ["authority", "launch", "base_vault", "creator_token_account", "token_program"],
+      "args": []
+    },
+    {
+      "name": "migrate",
+      "discriminant": 9,
+      "description": "Handler migrasi otomatis yang dipicu reaktif oleh chain setelah kurva selesai",
+      "accounts": ["launch", "base_vault", "quote_vault", "lp_base_dest", "lp_quote_dest", "token_program"],
+      "args": []
+    },
+    {
+      "name": "get_state",
+      "discriminant": 10,
+      "description": "Lihat status lifecycle, progress_bps, harga, market cap, dan fee outstanding",
+      "accounts": ["launch"],
       "args": []
     }
-  ]
+  ],
+  "deployedAt": "2026-09-10T03:45:00.000Z"
 }
