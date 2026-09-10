@@ -1,593 +1,625 @@
 // Copyright (c) 2026 Rexo
 // SPDX-License-Identifier: Apache-2.0
 
-//! Logika bisnis, dikelompokkan per peran seperti Meteora DBC.
+//! Logika bisnis inti.
 //!
-//! ```text
-//! Partner   create_config · update_config · claim_partner_fee
-//! Creator   initialize · claim_creator_fee · claim_creator_tokens
-//! Trading   buy_exact_in · buy_exact_out · sell_exact_in · sell_exact_out
-//! Migrasi   migrate
-//! Protokol  claim_protocol_fee
-//! ```
+//! Semua fungsi di sini adalah fungsi bebas yang menerima `&AccountInfo`
+//! secara eksplisit. Tidak ada yang tersembunyi di balik macro. Ini
+//! disengaja: bagian inilah yang akan diaudit, dan auditor harus bisa
+//! membacanya tanpa memahami DSL Venus lebih dulu.
 //!
-//! Semua fungsi menerima `&AccountInfo` eksplisit. Tidak ada yang
-//! tersembunyi di balik macro — bagian inilah yang diaudit, dan auditor
-//! harus bisa membacanya tanpa memahami DSL Venus lebih dulu.
+//! `lib.rs` di atas modul ini tipis — ia hanya menghubungkan DSL ke sini.
 
-use rialo_s_program::{account_info::AccountInfo, msg, pubkey::Pubkey};
+use rialo_s_program::{msg, pubkey::Pubkey};
 
-use crate::config::{ConfigPatch, LaunchConfig, MIGRATE_EXTERNAL};
-use crate::curve::CurveState;
+use crate::accounts::{GraduateAccounts, LaunchAccounts, TradeAccounts};
+use crate::constants::*;
 use crate::errors::RexoError;
-use crate::fees::{self, Payee};
-use crate::state::{narrow, Launch, STATE_MIGRATED, STATE_MIGRATING};
+use crate::events::*;
+use crate::guards;
+use crate::state::{narrow, LaunchView};
 use crate::{token, vault};
 
-pub type Res<T> = Result<T, rialo_s_program::program_error::ProgramError>;
+// ---------------------------------------------------------------------------
+// Launch
+// ---------------------------------------------------------------------------
 
-// ===========================================================================
-// PARTNER
-// ===========================================================================
-
-/// Buat config. Ini yang membuat satu program melayani banyak launchpad.
-pub fn create_config(cfg: &LaunchConfig) -> Res<()> {
-    cfg.validate()?;
-    msg!(
-        "rexo::config created fee_total={} partner={}",
-        cfg.fees.total_bps,
-        cfg.fees.partner_bps
-    );
-    Ok(())
+pub struct LaunchParams {
+    pub bond: u64,
+    pub dev_buy: u64,
+    pub now: u64,
 }
 
-/// Ubah config. Kurva dan supply ditolak — peluncuran yang sudah jalan
-/// memegang salinannya, dan mengubahnya membuat harga historis tidak bisa
-/// direproduksi.
-pub fn update_config(cfg: &mut LaunchConfig, patch: &ConfigPatch) -> Res<()> {
-    cfg.apply_update(patch)?;
-    msg!("rexo::config updated");
-    Ok(())
+pub struct LaunchOutcome {
+    pub view: LaunchView,
+    pub sealed_until: u64,
+    pub dev_tokens: u64,
 }
 
-// ===========================================================================
-// CREATOR — peluncuran
-// ===========================================================================
-
-pub struct InitAccounts<'a, 'info> {
-    pub payer: &'a AccountInfo<'info>,
-    pub launch: &'a AccountInfo<'info>,
-    pub mint: &'a AccountInfo<'info>,
-    pub authority: &'a AccountInfo<'info>,
-    pub base_vault: &'a AccountInfo<'info>,
-    pub quote_vault: &'a AccountInfo<'info>,
-    pub creator_token_account: &'a AccountInfo<'info>,
-    pub token_program: &'a AccountInfo<'info>,
-    pub system_program: &'a AccountInfo<'info>,
-}
-
-pub struct InitResult {
-    pub launch: Launch,
-    pub creator_tokens: u64,
-    pub quote_spent: u64,
-}
-
-/// Luncurkan token dari sebuah config.
+/// Buat token, kunci authority-nya, buka jendela sealed.
 ///
-/// Urutan disengaja: vault dulu, lalu mint + cabut authority, baru
-/// pembelian kreator. Pembelian kreator terjadi di transaksi yang SAMA
-/// dengan pembuatan mint supaya tidak ada celah bagi sniper untuk masuk
-/// di antaranya.
-pub fn initialize(
+/// Tier SELALU mulai di Unverified. Ia hanya bisa naik lewat
+/// `apply_verification` setelah REX mengembalikan bukti.
+pub fn launch(
     program_id: &Pubkey,
-    acc: &InitAccounts<'_, '_>,
-    cfg: &LaunchConfig,
-    creator_buy: u64,
-    now: u64,
-) -> Res<InitResult> {
-    cfg.validate()?;
-    let mut l = Launch::open(cfg, now)?;
+    acc: &LaunchAccounts<'_, '_>,
+    params: LaunchParams,
+) -> Result<LaunchOutcome, ProgramErrorAlias> {
+    guards::assert_tier_not_self_assigned(None)?;
 
-    vault::ensure_quote_vault(
+    // 1. Vault harus ada sebelum ada dana yang masuk.
+    vault::ensure_vault(
         program_id,
-        acc.launch.key,
+        acc.mint.key,
         acc.payer,
-        acc.quote_vault,
+        acc.vault,
         acc.system_program,
     )?;
 
-    // Membuat mint, mencetak seluruh supply ke base_vault, lalu MENCABUT
-    // mint authority dan freeze authority. Permanen. Setelah ini supply
-    // tetap selamanya dan tidak ada yang bisa membekukan dompet siapa pun.
+    // 1b. Creator vault harus dibuat idempoten agar penarikan fee kreator tidak gagal (Lubang 7.2 ditambal).
+    vault::ensure_creator_vault(
+        program_id,
+        acc.payer.key,
+        acc.payer,
+        acc.creator_vault,
+        acc.system_program,
+    )?;
+
+    // 2. Mint + cetak seluruh supply + CABUT authority. Satu transaksi.
     token::create_mint_and_lock(
         program_id,
         acc.payer,
         acc.mint,
-        acc.authority,
-        acc.base_vault,
+        acc.mint_authority,
+        acc.curve_token_account,
         acc.token_program,
         acc.system_program,
-        cfg.total_supply(),
+        TOTAL_SUPPLY,
     )?;
 
-    let mut creator_tokens = 0u64;
-    let mut quote_spent = 0u64;
+    // 3. Bond masuk vault. Dikembalikan saat lulus, hangus kalau ditinggalkan.
+    guards::require_bond(TIER_UNVERIFIED, params.bond)?;
+    vault::deposit(acc.payer, acc.vault, acc.system_program, params.bond)?;
 
-    if creator_buy > 0 {
-        let ccfg = l.curve_config();
-        let mut c = l.curve();
-        let r = c.buy(&ccfg, creator_buy as u128, 0)?;
-        creator_tokens = narrow(r.tokens_out)?;
+    let mut view = LaunchView::genesis(TIER_UNVERIFIED);
+    let sealed_until = params.now.saturating_add(SEALED_WINDOW_SECS);
 
-        if creator_tokens > cfg.max_creator_tokens() {
-            msg!(
-                "rexo::init creator buy {} exceeds cap {}",
-                creator_tokens,
-                cfg.max_creator_tokens()
-            );
-            return Err(RexoError::CreatorCapExceeded.into());
-        }
+    // 4. Dev buy opsional, dibatasi tier. Dilakukan di transaksi yang sama
+    //    dengan pembuatan mint supaya tidak ada celah untuk sniper.
+    let mut dev_tokens = 0u64;
+    if params.dev_buy > 0 {
+        let cfg = view.config();
+        let mut curve = view.curve();
+        let receipt = curve.buy(&cfg, params.dev_buy as u128, 0)?;
+        dev_tokens = narrow(receipt.tokens_out)?;
+        guards::require_creator_allocation(TIER_UNVERIFIED, dev_tokens)?;
 
-        quote_spent = narrow(r.quote_spent)?;
-        let fee = narrow(r.fee)?;
-        let shares = fees::split(fee, &l.fees, false)?;
+        view.apply(&curve)?;
+        vault::deposit(
+            acc.payer,
+            acc.vault,
+            acc.system_program,
+            narrow(receipt.quote_spent)?,
+        )?;
 
-        l.apply(&c)?;
-        l.ledger.accrue(&shares)?;
-        // Referral tidak berlaku di pembelian kreator, jadi bagiannya ikut
-        // protokol — `split` dengan referrer_present=false sudah menangani.
-        vault::deposit(acc.payer, acc.quote_vault, acc.system_program, quote_spent)?;
+        // Sapu fee dev-buy SEKARANG. Kalau tidak, ia mengendap di vault:
+        // `real_quote` hanya mencatat bagian net, jadi selisihnya tidak
+        // akan pernah ikut terbawa di `graduation_payload` maupun di jalur
+        // penjualan. Nilainya kecil per token, tapi bocor di setiap
+        // peluncuran dan tidak pernah bisa diambil siapa pun.
+        vault::withdraw(acc.vault, acc.treasury, narrow(receipt.fee_protocol)?)?;
+        vault::withdraw(acc.vault, acc.creator_vault, narrow(receipt.fee_creator)?)?;
 
-        // Token kreator TIDAK langsung dikirim. Ia masuk alokasi yang
-        // tunduk pada jadwal vesting dan baru cair setelah migrasi.
-        l.creator_allocation = creator_tokens;
+        // Token dev TIDAK langsung dikirim — ia masuk vesting.
+        // Lihat unlock_tranche.
     }
 
+    view.status = STATUS_SEALED;
+
     msg!(
-        "rexo::init mint={} creator_tokens={} spent={}",
+        "rexo::launch mint={} bond={} dev_tokens={} sealed_until={}",
         acc.mint.key,
-        creator_tokens,
-        quote_spent
+        params.bond,
+        dev_tokens,
+        sealed_until
     );
 
-    Ok(InitResult {
-        launch: l,
-        creator_tokens,
-        quote_spent,
+    Ok(LaunchOutcome {
+        view,
+        sealed_until,
+        dev_tokens,
     })
 }
 
-// ===========================================================================
-// TRADING
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Verifikasi
+// ---------------------------------------------------------------------------
 
-pub struct TradeAccounts<'a, 'info> {
-    pub trader: &'a AccountInfo<'info>,
-    pub launch: &'a AccountInfo<'info>,
-    pub mint: &'a AccountInfo<'info>,
-    pub authority: &'a AccountInfo<'info>,
-    pub base_vault: &'a AccountInfo<'info>,
-    pub quote_vault: &'a AccountInfo<'info>,
-    pub trader_token_account: &'a AccountInfo<'info>,
-    /// Opsional. Kalau tidak ada, bagian referral ikut ke protokol —
-    /// bukan dikembalikan ke trader, supaya harga tidak berbeda tergantung
-    /// siapa yang mengirim order.
-    pub referrer: Option<&'a AccountInfo<'info>>,
-    pub token_program: &'a AccountInfo<'info>,
-    pub system_program: &'a AccountInfo<'info>,
+/// Terapkan hasil verifikasi REX. Satu-satunya jalan tier bisa naik.
+pub fn apply_verification(
+    view: &mut LaunchView,
+    bond: u64,
+    members: u64,
+    age_days: u64,
+    ok: bool,
+) -> u8 {
+    if !ok || members < MIN_TELEGRAM_MEMBERS || age_days < MIN_X_ACCOUNT_AGE_DAYS {
+        view.tier = TIER_UNVERIFIED;
+        return TIER_UNVERIFIED;
+    }
+    let tier = if bond >= MIN_BOND[TIER_COMMITTED as usize] {
+        TIER_COMMITTED
+    } else if bond >= MIN_BOND[TIER_VERIFIED as usize] {
+        TIER_VERIFIED
+    } else {
+        TIER_UNVERIFIED
+    };
+    view.tier = tier;
+    tier
 }
 
-pub struct TradeResult {
-    pub base_amount: u64,
+// ---------------------------------------------------------------------------
+// Buy
+// ---------------------------------------------------------------------------
+
+pub struct TradeOutcome {
+    pub token_amount: u64,
     pub quote_amount: u64,
-    pub fee: u64,
+    pub fee_protocol: u64,
+    pub fee_creator: u64,
     pub refund: u64,
-    pub completed_curve: bool,
+    pub graduated: bool,
 }
 
-/// Beli dengan jumlah quote yang pasti.
-pub fn buy_exact_in(
+/// Beli token dari kurva.
+///
+/// Urutan penting: hitung dulu, commit state, baru pindahkan dana. Kalau
+/// matematikanya menolak, tidak ada satu kelvin pun yang berpindah.
+pub fn buy(
     program_id: &Pubkey,
     acc: &TradeAccounts<'_, '_>,
-    l: &mut Launch,
+    view: &mut LaunchView,
     quote_in: u64,
-    min_base_out: u64,
-) -> Res<TradeResult> {
-    if !l.is_funding() {
-        return Err(RexoError::NotFunding.into());
+    min_tokens_out: u64,
+    now: u64,
+) -> Result<TradeOutcome, ProgramErrorAlias> {
+    guards::require_active(view.status)?;
+
+    let cfg = view.config();
+    let mut curve = view.curve();
+    let receipt = curve.buy(&cfg, quote_in as u128, min_tokens_out as u128)?;
+
+    let tokens_out = narrow(receipt.tokens_out)?;
+    let quote_spent = narrow(receipt.quote_spent)?;
+    let fee_protocol = narrow(receipt.fee_protocol)?;
+    let fee_creator = narrow(receipt.fee_creator)?;
+    let refund = narrow(receipt.refund)?;
+
+    view.apply(&curve)?;
+
+    // -- pemindahan dana --
+    // Pembeli mengirim quote_spent (bukan quote_in — sisanya tidak pernah
+    // meninggalkan wallet-nya, jadi tidak perlu refund terpisah).
+    vault::deposit(acc.trader, acc.vault, acc.system_program, quote_spent)?;
+
+    // Fee keluar dari vault ke tujuan masing-masing.
+    vault::withdraw(acc.vault, acc.treasury, fee_protocol)?;
+    vault::withdraw(acc.vault, acc.creator_vault, fee_creator)?;
+
+    // Token keluar dari akun kurva ke pembeli.
+    token::transfer_from_curve(
+        program_id,
+        acc.mint,
+        acc.curve_token_account,
+        acc.trader_token_account,
+        acc.mint_authority,
+        acc.token_program,
+        tokens_out,
+    )?;
+
+    if receipt.graduated {
+        view.status = STATUS_GRADUATED;
     }
-    let ccfg = l.curve_config();
-    let mut c = l.curve();
-    let r = c.buy(&ccfg, quote_in as u128, min_base_out as u128)?;
 
-    let base_out = narrow(r.tokens_out)?;
-    let spent = narrow(r.quote_spent)?;
-    let fee = narrow(r.fee)?;
-    let refund = narrow(r.refund)?;
-    let shares = fees::split(fee, &l.fees, acc.referrer.is_some())?;
-
-    l.apply(&c)?;
-    l.ledger.accrue(&shares)?;
-
-    settle_buy(program_id, acc, spent, base_out, shares.referral)?;
-
-    let completed = l.real_token == 0;
-    if completed {
-        l.state = STATE_MIGRATING;
-    }
+    let progress = curve.progress_bps(&cfg);
+    crate::rexo_emit!(Trade {
+        mint: *acc.mint.key,
+        trader: *acc.trader.key,
+        is_buy: true,
+        quote_amount: quote_spent,
+        token_amount: tokens_out,
+        fee_protocol,
+        fee_creator,
+        virtual_quote: view.virtual_quote,
+        virtual_token: view.virtual_token,
+        real_quote: view.real_quote,
+        real_token: view.real_token,
+        progress_bps: progress as u64,
+        timestamp: now,
+    });
 
     msg!(
-        "rexo::buy in={} out={} fee={} refund={}",
-        spent,
-        base_out,
-        fee,
-        refund
-    );
-    Ok(TradeResult {
-        base_amount: base_out,
-        quote_amount: spent,
-        fee,
-        refund,
-        completed_curve: completed,
-    })
-}
-
-/// Beli sejumlah token yang pasti, dengan batas atas belanja.
-///
-/// Tanpa varian ini kamu tidak bisa bilang "aku mau tepat 1 juta token".
-/// LaunchLab punya `buy_exact_out`; v1 Rexo tidak, dan itu kekurangan
-/// nyata bukan sekadar kenyamanan.
-pub fn buy_exact_out(
-    program_id: &Pubkey,
-    acc: &TradeAccounts<'_, '_>,
-    l: &mut Launch,
-    base_out: u64,
-    max_quote_in: u64,
-) -> Res<TradeResult> {
-    if !l.is_funding() {
-        return Err(RexoError::NotFunding.into());
-    }
-    let ccfg = l.curve_config();
-    let c = l.curve();
-    let gross = narrow(c.quote_in_for_tokens_out(&ccfg, base_out as u128)?)?;
-    if gross > max_quote_in {
-        msg!("rexo::buy_exact_out needs {} max {}", gross, max_quote_in);
-        return Err(RexoError::ExceedsMaxIn.into());
-    }
-    // Dieksekusi lewat jalur exact_in dengan jumlah yang sudah dihitung,
-    // sehingga hanya ada SATU implementasi matematika kurva yang dipakai
-    // kedua arah. Dua implementasi paralel adalah cara termudah agar
-    // keduanya perlahan menyimpang.
-    buy_exact_in(program_id, acc, l, gross, base_out)
-}
-
-pub fn sell_exact_in(
-    program_id: &Pubkey,
-    acc: &TradeAccounts<'_, '_>,
-    l: &mut Launch,
-    base_in: u64,
-    min_quote_out: u64,
-) -> Res<TradeResult> {
-    if !l.is_funding() {
-        return Err(RexoError::NotFunding.into());
-    }
-    let ccfg = l.curve_config();
-    let mut c = l.curve();
-    let r = c.sell(&ccfg, base_in as u128, min_quote_out as u128)?;
-
-    let quote_out = narrow(r.quote_out)?;
-    let fee = narrow(r.fee)?;
-    let shares = fees::split(fee, &l.fees, acc.referrer.is_some())?;
-
-    l.apply(&c)?;
-    l.ledger.accrue(&shares)?;
-
-    settle_sell(program_id, acc, base_in, quote_out, shares.referral)?;
-
-    msg!("rexo::sell in={} out={} fee={}", base_in, quote_out, fee);
-    Ok(TradeResult {
-        base_amount: base_in,
-        quote_amount: quote_out,
-        fee,
-        refund: 0,
-        completed_curve: false,
-    })
-}
-
-/// Jual sampai menerima sejumlah quote yang pasti.
-pub fn sell_exact_out(
-    program_id: &Pubkey,
-    acc: &TradeAccounts<'_, '_>,
-    l: &mut Launch,
-    quote_out: u64,
-    max_base_in: u64,
-) -> Res<TradeResult> {
-    if !l.is_funding() {
-        return Err(RexoError::NotFunding.into());
-    }
-    let ccfg = l.curve_config();
-    let c = l.curve();
-    let base_in = narrow(c.tokens_in_for_quote_out(&ccfg, quote_out as u128)?)?;
-    if base_in > max_base_in {
-        msg!("rexo::sell_exact_out needs {} max {}", base_in, max_base_in);
-        return Err(RexoError::ExceedsMaxIn.into());
-    }
-    sell_exact_in(program_id, acc, l, base_in, quote_out)
-}
-
-// -- pemindahan dana ------------------------------------------------------
-//
-// Fee TIDAK dipindahkan di sini. Ia menumpuk di quote_vault dan dicatat di
-// ledger; penerima menariknya lewat claim_*. Hanya referral yang dibayar
-// seketika, karena penerimanya berbeda tiap perdagangan.
-
-fn settle_buy(
-    program_id: &Pubkey,
-    acc: &TradeAccounts<'_, '_>,
-    quote_spent: u64,
-    base_out: u64,
-    referral: u64,
-) -> Res<()> {
-    vault::deposit(
-        acc.trader,
-        acc.quote_vault,
-        acc.system_program,
+        "rexo::buy tokens={} spent={} fee_p={} fee_c={} progress={}bps graduated={}",
+        tokens_out,
         quote_spent,
-    )?;
-    if let Some(r) = acc.referrer {
-        vault::withdraw(acc.quote_vault, r, referral)?;
-    }
-    token::transfer_out(
-        program_id,
-        acc.launch.key,
-        acc.mint,
-        acc.base_vault,
-        acc.trader_token_account,
-        acc.authority,
-        acc.token_program,
-        base_out,
-    )
+        fee_protocol,
+        fee_creator,
+        progress,
+        receipt.graduated
+    );
+
+    Ok(TradeOutcome {
+        token_amount: tokens_out,
+        quote_amount: quote_spent,
+        fee_protocol,
+        fee_creator,
+        refund,
+        graduated: receipt.graduated,
+    })
 }
 
-fn settle_sell(
-    program_id: &Pubkey,
+// ---------------------------------------------------------------------------
+// Sell
+// ---------------------------------------------------------------------------
+
+pub struct SellParams<'k> {
+    pub tokens_in: u64,
+    pub min_quote_out: u64,
+    pub creator: &'k Pubkey,
+    pub creator_tranches_unlocked: u8,
+    /// Sisa kolam bond yang hangus, dalam kelvin. Nol kalau token sehat.
+    pub exit_pool: u64,
+    /// Token yang masih beredar saat abandonment terjadi.
+    pub exit_base: u64,
+    pub now: u64,
+}
+
+pub struct SellOutcome {
+    pub trade: TradeOutcome,
+    /// Bagian bond hangus yang dibayarkan ke penjual ini.
+    pub exit_bonus: u64,
+    pub exit_pool_left: u64,
+    pub exit_base_left: u64,
+}
+
+pub fn sell(
     acc: &TradeAccounts<'_, '_>,
-    base_in: u64,
-    quote_out: u64,
-    referral: u64,
-) -> Res<()> {
-    // Token masuk dulu. Kalau transfer ini gagal, transaksi batal sebelum
-    // satu kelvin pun meninggalkan vault.
-    token::transfer_in(
+    view: &mut LaunchView,
+    p: SellParams<'_>,
+) -> Result<SellOutcome, ProgramErrorAlias> {
+    // `require_exitable`, BUKAN `require_active`.
+    //
+    // Pemegang token harus selalu bisa keluar — termasuk setelah token
+    // ditandai ditinggalkan. Memakai require_active di sini mengunci mereka
+    // dan menghukum korban, bukan pelaku.
+    guards::require_exitable(view.status)?;
+
+    let cfg = view.config();
+    let curve_before = view.curve();
+    let progress = curve_before.progress_bps(&cfg) as u64;
+    if acc.trader.key == p.creator
+        && guards::creator_locked(p.creator_tranches_unlocked, progress, false)
+    {
+        return Err(RexoError::CreatorLocked.into());
+    }
+
+    let mut curve = curve_before;
+    let receipt = curve.sell(&cfg, p.tokens_in as u128, p.min_quote_out as u128)?;
+
+    let quote_out = narrow(receipt.quote_out)?;
+    let fee_protocol = narrow(receipt.fee_protocol)?;
+    let fee_creator = narrow(receipt.fee_creator)?;
+
+    view.apply(&curve)?;
+
+    // Bagian bond yang hangus, dibayar pro-rata saat penjual keluar.
+    let (bonus, pool_left, base_left) =
+        guards::exit_bonus(p.exit_pool, p.exit_base, p.tokens_in);
+
+    // Token masuk dulu, baru dana keluar. Kalau transfer token gagal,
+    // transaksi batal sebelum vault tersentuh.
+    token::transfer_to_curve(
         acc.mint,
         acc.trader_token_account,
-        acc.base_vault,
+        acc.curve_token_account,
         acc.trader,
         acc.token_program,
-        base_in,
+        p.tokens_in,
     )?;
-    vault::withdraw(acc.quote_vault, acc.trader, quote_out)?;
-    if let Some(r) = acc.referrer {
-        vault::withdraw(acc.quote_vault, r, referral)?;
-    }
-    let _ = program_id;
-    Ok(())
+
+    vault::withdraw(acc.vault, acc.trader, quote_out.saturating_add(bonus))?;
+    vault::withdraw(acc.vault, acc.treasury, fee_protocol)?;
+    vault::withdraw(acc.vault, acc.creator_vault, fee_creator)?;
+
+    crate::rexo_emit!(Trade {
+        mint: *acc.mint.key,
+        trader: *acc.trader.key,
+        is_buy: false,
+        quote_amount: quote_out,
+        token_amount: p.tokens_in,
+        fee_protocol,
+        fee_creator,
+        virtual_quote: view.virtual_quote,
+        virtual_token: view.virtual_token,
+        real_quote: view.real_quote,
+        real_token: view.real_token,
+        progress_bps: curve.progress_bps(&cfg) as u64,
+        timestamp: p.now,
+    });
+
+    msg!(
+        "rexo::sell tokens={} out={} bonus={} fee_p={} fee_c={}",
+        p.tokens_in,
+        quote_out,
+        bonus,
+        fee_protocol,
+        fee_creator
+    );
+
+    Ok(SellOutcome {
+        trade: TradeOutcome {
+            token_amount: p.tokens_in,
+            quote_amount: quote_out,
+            fee_protocol,
+            fee_creator,
+            refund: 0,
+            graduated: false,
+        },
+        exit_bonus: bonus,
+        exit_pool_left: pool_left,
+        exit_base_left: base_left,
+    })
 }
 
-// ===========================================================================
-// KLAIM FEE — pola tarik
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Abandonment
+// ---------------------------------------------------------------------------
 
-pub fn claim_fee<'a>(
-    l: &mut Launch,
-    who: Payee,
-    quote_vault: &AccountInfo<'a>,
-    recipient: &AccountInfo<'a>,
-) -> Res<u64> {
-    let amount = l.ledger.take(who);
-    if amount == 0 {
-        return Err(RexoError::NoFeesToClaim.into());
-    }
-    vault::withdraw(quote_vault, recipient, amount)?;
-    msg!("rexo::claim {:?} amount={}", who, amount);
-    Ok(amount)
+pub struct AbandonOutcome {
+    /// Kolam bond yang hangus, dibayar pro-rata saat pemegang keluar.
+    pub exit_pool: u64,
+    /// Token yang masih beredar dan berhak atas kolam itu.
+    pub exit_base: u64,
+    pub burned_creator_tokens: u64,
 }
 
-// ===========================================================================
-// KLAIM TOKEN KREATOR — tunduk vesting
-// ===========================================================================
-
-pub fn claim_creator_tokens<'a>(
-    program_id: &Pubkey,
-    l: &mut Launch,
-    launch_key: &Pubkey,
-    mint: &AccountInfo<'a>,
-    base_vault: &AccountInfo<'a>,
-    creator_token_account: &AccountInfo<'a>,
-    authority: &AccountInfo<'a>,
-    token_program: &AccountInfo<'a>,
-    now: u64,
-) -> Res<u64> {
-    let claimable = l.creator_claimable(now);
-    if claimable == 0 {
-        return Err(RexoError::NothingToClaim.into());
-    }
-    l.creator_claimed = l
-        .creator_claimed
-        .checked_add(claimable)
-        .ok_or(RexoError::MathOverflow)?;
-
-    token::transfer_out(
-        program_id,
-        launch_key,
-        mint,
-        base_vault,
-        creator_token_account,
-        authority,
-        token_program,
-        claimable,
-    )?;
-    msg!("rexo::creator_claim amount={}", claimable);
-    Ok(claimable)
-}
-
-// ===========================================================================
-// MIGRASI
-// ===========================================================================
-
-pub struct MigrateResult {
-    pub lp_base: u64,
-    pub lp_quote: u64,
-}
-
-/// Pindahkan likuiditas keluar dari kurva.
+/// Hanguskan bond dan burn alokasi kreator setelah heartbeat gagal berulang.
 ///
-/// Dipicu `AFTER n seconds CALL [migrate]` yang didaftarkan saat kurva
-/// habis. **Tidak ada keeper.** Meteora butuh `dbc-keeper` untuk langkah
-/// ini; LaunchLab butuh seseorang memanggil `migrate_to_amm`. Ini satu
-/// keunggulan Rialo yang bisa dipakai hari ini dengan sintaks yang sudah
-/// terbukti.
-pub fn migrate<'a>(
+/// # Kenapa bond TIDAK memakai `CurveState::forfeit_bond`
+///
+/// `forfeit_bond` menaruh nilainya di `forfeited_quote`, yang hanya dibayar
+/// lewat `graduation_payload`. Tapi token yang ditinggalkan **tidak akan
+/// pernah lulus** — jadi bond itu akan nyangkut di vault selamanya.
+///
+/// Yang benar: bond jadi kolam keluar yang dibagikan pro-rata ke pemegang
+/// token saat mereka menjual. Merekalah pihak yang dirugikan, jadi
+/// merekalah yang dikompensasi — bukan protokol, dan bukan kolam LP yang
+/// tidak akan pernah terbentuk.
+#[allow(clippy::too_many_arguments)]
+pub fn abandon(
     program_id: &Pubkey,
-    l: &mut Launch,
-    launch_key: &Pubkey,
-    mint: &AccountInfo<'a>,
-    base_vault: &AccountInfo<'a>,
-    quote_vault: &AccountInfo<'a>,
-    lp_base_dest: &AccountInfo<'a>,
-    lp_quote_dest: &AccountInfo<'a>,
-    authority: &AccountInfo<'a>,
-    token_program: &AccountInfo<'a>,
+    acc: &TradeAccounts<'_, '_>,
+    view: &mut LaunchView,
+    bond: u64,
+    creator_tokens_locked: u64,
+    global_failures: u64,
+    global_checks: u64,
     now: u64,
-) -> Res<MigrateResult> {
-    if !l.is_migrating() {
-        return Err(RexoError::NotMigrating.into());
-    }
-    // Sabuk dan bretel: state MIGRATING harus konsisten dengan reserve.
-    if l.real_token != 0 {
-        msg!("rexo::migrate rejected real_token={}", l.real_token);
-        return Err(RexoError::NotMigrating.into());
-    }
+) -> Result<AbandonOutcome, ProgramErrorAlias> {
+    guards::abandonment_permitted(global_failures, global_checks)?;
+    guards::require_active(view.status)?;
 
-    let lp_base = l.cfg_lp_reserve;
-    // Hanya reserve kurva yang pindah. Fee yang belum ditarik tetap di
-    // vault — menariknya ke pool akan mencuri hak partner dan kreator.
-    let lp_quote = l.real_quote;
-
-    token::transfer_out(
-        program_id,
-        launch_key,
-        mint,
-        base_vault,
-        lp_base_dest,
-        authority,
-        token_program,
-        lp_base,
-    )?;
-    vault::withdraw(quote_vault, lp_quote_dest, lp_quote)?;
-
-    l.real_quote = 0;
-    l.state = STATE_MIGRATED;
-    l.migrated_at = now;
-
-    if l.migrate_target == MIGRATE_EXTERNAL {
-        // Tujuan eksternal berarti akun tujuan sudah menerima aset dan
-        // integrator yang membuat pool-nya. Program ini tidak berpura-pura
-        // tahu cara membuat pool di DEX yang belum ada di Rialo.
-        msg!("rexo::migrate external base={} quote={}", lp_base, lp_quote);
-    } else {
-        msg!("rexo::migrate hold base={} quote={}", lp_base, lp_quote);
+    if creator_tokens_locked > 0 {
+        token::burn_from_curve(
+            program_id,
+            acc.mint,
+            acc.curve_token_account,
+            acc.mint_authority,
+            acc.token_program,
+            creator_tokens_locked,
+        )?;
     }
 
-    Ok(MigrateResult { lp_base, lp_quote })
+    // Token beredar di tangan publik = yang terjual dari kurva, dikurangi
+    // alokasi kreator yang baru saja di-burn.
+    let sold = INITIAL_REAL_TOKEN.saturating_sub(view.real_token);
+    let exit_base = sold.saturating_sub(creator_tokens_locked);
+
+    // Kalau tidak ada pemegang sama sekali, tidak ada yang dirugikan.
+    // Bond tetap di vault dan disapu treasury lewat jalur terpisah.
+    let exit_pool = if exit_base == 0 { 0 } else { bond };
+
+    view.status = STATUS_ABANDONED;
+    view.tier = TIER_UNVERIFIED;
+
+    crate::rexo_emit!(Abandoned {
+        mint: *acc.mint.key,
+        forfeited_bond: exit_pool,
+        burned_creator_tokens: creator_tokens_locked,
+        timestamp: now,
+    });
+
+    msg!(
+        "rexo::abandoned mint={} exit_pool={} exit_base={} burned={}",
+        acc.mint.key,
+        exit_pool,
+        exit_base,
+        creator_tokens_locked
+    );
+
+    Ok(AbandonOutcome {
+        exit_pool,
+        exit_base,
+        burned_creator_tokens: creator_tokens_locked,
+    })
 }
 
-// ===========================================================================
-// Tests logika murni
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Graduation
+// ---------------------------------------------------------------------------
+
+pub struct GraduationOutcome {
+    pub lp_tokens: u64,
+    pub lp_quote: u64,
+    pub bond_returned: u64,
+    pub sfs_endowment: u64,
+}
+
+pub fn graduate(
+    program_id: &Pubkey,
+    acc: &GraduateAccounts<'_, '_>,
+    view: &LaunchView,
+    bond: u64,
+    bond_already_settled: bool,
+    now: u64,
+) -> Result<GraduationOutcome, ProgramErrorAlias> {
+    guards::require_graduated(view.status)?;
+
+    // Sabuk dan bretel: status GRADUATED harus konsisten dengan reserve.
+    // Kalau tidak, ada jalur lain yang menyetel status tanpa menguras kurva.
+    if view.real_token != 0 {
+        msg!("real_token={} tapi status graduated", view.real_token);
+        return Err(RexoError::WrongStatus.into());
+    }
+
+    let cfg = view.config();
+    let curve = view.curve();
+    let payload = curve.graduation_payload(&cfg)?;
+
+    let lp_tokens = narrow(payload.lp_tokens)?;
+    let lp_quote = narrow(payload.lp_quote)?;
+
+    // Likuiditas pindah ke pool.
+    token::transfer_from_curve(
+        program_id,
+        acc.mint,
+        acc.curve_token_account,
+        acc.pool_token_account,
+        acc.mint_authority,
+        acc.token_program,
+        lp_tokens,
+    )?;
+    vault::withdraw(acc.vault, acc.pool_quote_account, lp_quote)?;
+
+    // TODO(pool): setelah pool dibuat, LP token WAJIB di-burn atau di-lock.
+    // LP yang bisa ditarik kembali membuat "graduation" cuma rug pull
+    // dengan langkah tambahan. Ini bukan detail — ini syarat.
+
+    // Bond kembali: kreator menuntaskan janjinya.
+    let mut bond_returned = 0u64;
+    if !bond_already_settled && bond > 0 {
+        vault::withdraw(acc.vault, acc.creator, bond)?;
+        bond_returned = bond;
+    }
+
+    // Stake-for-Service: sebagian fee protokol di-stake, dan YIELD-nya
+    // membiayai automasi token ini selamanya. Tidak ada top-up, tidak ada
+    // bot yang kehabisan saldo. Ini yang tidak bisa ditiru chain lain.
+    //
+    // AKUNTANSI — baca ini sebelum mengubah apa pun:
+    // fee disapu dari vault ke treasury SEGERA di setiap trade (lihat
+    // `buy`/`sell`). Artinya `view.fees_protocol` adalah PENGHITUNG SEUMUR
+    // HIDUP, bukan saldo yang masih tersimpan di vault. Endowment di bawah
+    // karena itu harus didanai dari akun TREASURY, bukan dari vault kurva.
+    // Menariknya dari vault akan menguras likuiditas LP.
+    let sfs_endowment = view
+        .fees_protocol
+        .saturating_mul(SFS_ENDOWMENT_BPS)
+        / BPS_DENOM;
+    // TODO(sfs): buat posisi SfS dengan routing fraction dan arahkan
+    // yield-nya ke ServicePaymaster untuk membiayai heartbeat token ini.
+
+    crate::rexo_emit!(Graduated {
+        mint: *acc.mint.key,
+        lp_tokens,
+        lp_quote,
+        fees_protocol: view.fees_protocol,
+        fees_creator: view.fees_creator,
+        bond_returned,
+        sfs_endowment,
+        timestamp: now,
+    });
+
+    msg!(
+        "rexo::graduate lp_tokens={} lp_quote={} bond_returned={} sfs={}",
+        lp_tokens,
+        lp_quote,
+        bond_returned,
+        sfs_endowment
+    );
+
+    Ok(GraduationOutcome {
+        lp_tokens,
+        lp_quote,
+        bond_returned,
+        sfs_endowment,
+    })
+}
+
+// Alias supaya signature tetap pendek dan konversi error otomatis jalan.
+pub type ProgramErrorAlias = rialo_s_program::program_error::ProgramError;
+
+// ---------------------------------------------------------------------------
+// Tests logika murni (tanpa AccountInfo)
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{LaunchConfig, ONE_QUOTE};
-    use crate::fees::Payee;
 
-    fn launch() -> Launch {
-        Launch::open(&LaunchConfig::pumpfun_like(), 0).unwrap()
-    }
-
-    /// Simulasi murni: perdagangan menambah reserve dan ledger, saldo vault
-    /// harus selalu sama dengan reserve + fee yang belum ditarik.
     #[test]
-    fn vault_invariant_survives_mixed_trading() {
-        let mut l = launch();
-        let ccfg = l.curve_config();
-        let mut vault: u64 = 0;
-        let mut held: u128 = 0;
-
-        for i in 1..=60u64 {
-            let mut c = l.curve();
-            if i % 4 == 0 && held > 1_000_000 {
-                let amt = held / 4;
-                let r = c.sell(&ccfg, amt, 0).unwrap();
-                let fee = narrow(r.fee).unwrap();
-                let out = narrow(r.quote_out).unwrap();
-                let s = fees::split(fee, &l.fees, false).unwrap();
-                l.apply(&c).unwrap();
-                l.ledger.accrue(&s).unwrap();
-                vault -= out + s.referral;
-                held -= amt;
-            } else {
-                let q = i * ONE_QUOTE / 4;
-                let r = c.buy(&ccfg, q as u128, 0).unwrap();
-                let fee = narrow(r.fee).unwrap();
-                let spent = narrow(r.quote_spent).unwrap();
-                let s = fees::split(fee, &l.fees, false).unwrap();
-                l.apply(&c).unwrap();
-                l.ledger.accrue(&s).unwrap();
-                vault += spent - s.referral;
-                held += r.tokens_out;
-            }
-            assert_eq!(
-                vault,
-                l.expected_quote_balance(),
-                "invariant pecah di langkah {}",
-                i
-            );
-        }
-
-        // tarik semua fee, sisa vault harus persis reserve kurva
-        for w in [Payee::Protocol, Payee::Partner, Payee::Creator] {
-            vault -= l.ledger.take(w);
-        }
-        assert_eq!(vault, l.real_quote);
-        assert_eq!(l.ledger.outstanding(), 0);
+    fn verification_cannot_promote_without_socials() {
+        let mut v = LaunchView::genesis(TIER_UNVERIFIED);
+        // bond besar tapi sosial gagal -> tetap Unverified
+        let t = apply_verification(&mut v, 100 * ONE_RLO, 0, 0, false);
+        assert_eq!(t, TIER_UNVERIFIED);
+        assert_eq!(v.tier, TIER_UNVERIFIED);
     }
 
     #[test]
-    fn migration_leaves_unclaimed_fees_behind() {
-        let mut l = launch();
-        let ccfg = l.curve_config();
-        let mut c = l.curve();
-        let r = c.buy(&ccfg, 200 * ONE_QUOTE as u128, 0).unwrap();
-        let fee = narrow(r.fee).unwrap();
-        l.apply(&c).unwrap();
-        l.ledger.accrue(&fees::split(fee, &l.fees, false).unwrap())
-            .unwrap();
-        l.state = STATE_MIGRATING;
-
-        let reserve = l.real_quote;
-        let owed = l.ledger.outstanding();
-        assert!(owed > 0);
-        // Yang pindah ke pool hanya reserve. Fee tetap bisa ditarik.
-        assert_eq!(reserve, 85_005_359_057);
-        assert_eq!(l.expected_quote_balance(), reserve + owed);
+    fn verification_cannot_promote_without_bond() {
+        let mut v = LaunchView::genesis(TIER_UNVERIFIED);
+        // sosial lolos tapi tanpa bond -> tetap Unverified
+        let t = apply_verification(&mut v, 0, 500, 365, true);
+        assert_eq!(t, TIER_UNVERIFIED);
     }
 
     #[test]
-    fn trading_blocked_once_curve_completes() {
-        let mut l = launch();
-        l.state = STATE_MIGRATING;
-        assert!(!l.is_funding());
+    fn verification_tiers_follow_bond_thresholds() {
+        let mut v = LaunchView::genesis(TIER_UNVERIFIED);
+        assert_eq!(
+            apply_verification(&mut v, 2 * ONE_RLO, 500, 365, true),
+            TIER_VERIFIED
+        );
+        assert_eq!(
+            apply_verification(&mut v, 10 * ONE_RLO, 500, 365, true),
+            TIER_COMMITTED
+        );
+    }
+
+    #[test]
+    fn social_thresholds_are_enforced_at_the_boundary() {
+        let mut v = LaunchView::genesis(TIER_UNVERIFIED);
+        // satu anggota kurang -> gagal
+        assert_eq!(
+            apply_verification(&mut v, 10 * ONE_RLO, MIN_TELEGRAM_MEMBERS - 1, 365, true),
+            TIER_UNVERIFIED
+        );
+        // pas di ambang -> lolos
+        assert_eq!(
+            apply_verification(&mut v, 10 * ONE_RLO, MIN_TELEGRAM_MEMBERS, 365, true),
+            TIER_COMMITTED
+        );
+        // umur akun satu hari kurang -> gagal
+        assert_eq!(
+            apply_verification(
+                &mut v,
+                10 * ONE_RLO,
+                500,
+                MIN_X_ACCOUNT_AGE_DAYS - 1,
+                true
+            ),
+            TIER_UNVERIFIED
+        );
     }
 }
