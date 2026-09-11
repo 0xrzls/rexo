@@ -24,7 +24,7 @@
 //! Kalau invariant ini pecah, ada jalur yang memindahkan kelvin tanpa
 //! mencatatnya. Ada test khusus untuk itu.
 
-use crate::config::{FeeSplit, BPS_DENOM};
+use crate::config::FeeSplit;
 use crate::errors::RexoError;
 
 /// Saldo yang belum ditarik, per penerima.
