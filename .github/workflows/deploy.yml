@@ -282,7 +282,7 @@ jobs:
           printf '%s' "${RIALO_DEPLOY_KEY}" > ~/.config/rialo/deployer.keypair
           chmod 600 ~/.config/rialo/deployer.keypair
           
-          python3 - <<'EOF'
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" << 'EOF'
           import json, os, sys
           p = os.path.expanduser("~/.config/rialo/deployer.keypair")
           try:
@@ -326,29 +326,16 @@ jobs:
             echo "Transaksi deploy berhasil disiarkan dengan signature: ${SIG}"
             echo "Mengambil rincian transaksi on-chain untuk mengekstrak Program ID..."
             rialo client transaction -n ${{ inputs.network }} --json "${SIG}" > /tmp/tx.json || true
-            PROGRAM_ID=$(python3 -c "
-import json, sys
-try:
-    data = json.load(open('/tmp/tx.json'))
-    tx = data.get('result', data).get('transaction', {}).get('message', {})
-    ix = tx['instructions'][0]
-    # Instruksi Deploy merujuk akun program di accounts[0]
-    prog_id = tx['account_keys'][ix['accounts'][0]]
-    print(prog_id)
-except Exception as e:
-    sys.exit(1)
-" 2>/dev/null || true)
+            PROGRAM_ID=$(python3 -c "import json, sys; d=json.load(open('/tmp/tx.json')); tx=d.get('result', d).get('transaction', {}).get('message', {}); ix=tx['instructions'][0]; print(tx['account_keys'][ix['accounts'][0]])" 2>/dev/null || true)
           fi
 
           # Fallback jika rialo CLI sudah langsung mencetak Program Id di log
           if [ -z "${PROGRAM_ID}" ]; then
-            PROGRAM_ID=$(python3 -c "
-import re, sys
-lines = open('/tmp/deploy.log').read()
-m = re.search(r'Program Id:\s*([1-9A-HJ-NP-Za-km-z]{32,44})', lines, re.IGNORECASE)
-if m:
-    print(m.group(1))
-" 2>/dev/null || true)
+            PROGRAM_ID=$(python3 -c "import re; m=re.search(r'Program Id:\s*([1-9A-HJ-NP-Za-km-z]{32,44})', open('/tmp/deploy.log').read(), re.IGNORECASE); print(m.group(1) if m else '')" 2>/dev/null || true)
+          fi
+
+          if [ -z "${PROGRAM_ID}" ]; then
+            PROGRAM_ID=$(grep -oE '[1-9A-HJ-NP-Za-km-z]{32,44}' /tmp/deploy.log | head -1 || true)
           fi
 
           if [ -z "${PROGRAM_ID}" ]; then
@@ -369,8 +356,7 @@ if m:
           
           rialo client account -n ${{ inputs.network }} --json "${PROGRAM_ID}" > /tmp/account.json
           
-          python3 - << 'EOF'
-          import json, base64, hashlib, sys, os
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" << 'EOF'
 
           with open('/tmp/account.json', 'r') as f:
               raw_acc = json.load(f)
@@ -449,8 +435,7 @@ if m:
           set -euo pipefail
           echo "Menyimpan metadata deployment baru dan menggantikan artefak lama..."
           
-          python3 - << 'EOF'
-          import json, os, datetime
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" << 'EOF'
 
           program_id = os.environ.get('PROGRAM_ID', '').strip()
           network = "${{ inputs.network }}"
