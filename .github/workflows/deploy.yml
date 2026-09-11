@@ -278,21 +278,21 @@ jobs:
 
           if [ -z "${RIALO_DEPLOY_KEY:-}" ]; then
             echo "::notice::Secret RIALO_DEPLOY_KEY tidak diset di GitHub Secrets. Membuat keypair disposable otomatis untuk ${{ inputs.network }}..."
-            python3 -c "
-import json, os, sys
-try:
-    from cryptography.hazmat.primitives.asymmetric import ed25519
-    key = ed25519.Ed25519PrivateKey.generate()
-    raw = list(key.private_bytes_raw() + key.public_key().public_bytes_raw())
-    p = os.path.expanduser('~/.config/rialo/deployer.keypair')
-    with open(p, 'w') as f:
-        json.dump(raw, f)
-    os.chmod(p, 0o600)
-    print('Keypair deployer disposable 64-byte berhasil dibuat.')
-except Exception as e:
-    print(f'Gagal membuat keypair dengan cryptography: {e}')
-    sys.exit(1)
-" || rialo client keypair generate --output-file ~/.config/rialo/deployer.keypair || true
+            python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" << 'PYEOF' || rialo client keypair generate --output-file ~/.config/rialo/deployer.keypair || true
+            import json, os, sys
+            try:
+                from cryptography.hazmat.primitives.asymmetric import ed25519
+                key = ed25519.Ed25519PrivateKey.generate()
+                raw = list(key.private_bytes_raw() + key.public_key().public_bytes_raw())
+                p = os.path.expanduser('~/.config/rialo/deployer.keypair')
+                with open(p, 'w') as f:
+                    json.dump(raw, f)
+                os.chmod(p, 0o600)
+                print('Keypair deployer disposable 64-byte berhasil dibuat.')
+            except Exception as e:
+                print(f'Gagal membuat keypair dengan cryptography: {e}')
+                sys.exit(1)
+            PYEOF
           else
             printf '%s' "${RIALO_DEPLOY_KEY}" > ~/.config/rialo/deployer.keypair
             chmod 600 ~/.config/rialo/deployer.keypair
