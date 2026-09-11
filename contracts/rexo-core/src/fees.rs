@@ -160,7 +160,7 @@ pub enum Payee {
 mod tests {
     use super::*;
 
-    fn cfg() -> FeeSplit {
+    fn sample_fee_cfg() -> FeeSplit {
         FeeSplit {
             total_bps: 100,
             protocol_bps: 40,
@@ -173,14 +173,14 @@ mod tests {
     #[test]
     fn split_is_exact_no_kelvin_lost() {
         for fee in [1u64, 7, 99, 100, 10_000_000, 858_639_991] {
-            let s = split(fee, &cfg(), true).unwrap();
+            let s = split(fee, &sample_fee_cfg(), true).unwrap();
             assert_eq!(s.total(), fee, "fee={}", fee);
         }
     }
 
     #[test]
     fn split_matches_configured_ratios() {
-        let s = split(10_000_000, &cfg(), true).unwrap();
+        let s = split(10_000_000, &sample_fee_cfg(), true).unwrap();
         assert_eq!(s.protocol, 4_000_000);
         assert_eq!(s.partner, 3_000_000);
         assert_eq!(s.creator, 2_000_000);
@@ -192,8 +192,8 @@ mod tests {
         // Penting: total fee harus IDENTIK dengan atau tanpa referrer,
         // kalau tidak harga jadi berbeda tergantung siapa yang mengirim
         // order — dan itu bisa diarbitrase.
-        let with = split(10_000_000, &cfg(), true).unwrap();
-        let without = split(10_000_000, &cfg(), false).unwrap();
+        let with = split(10_000_000, &sample_fee_cfg(), true).unwrap();
+        let without = split(10_000_000, &sample_fee_cfg(), false).unwrap();
         assert_eq!(with.total(), without.total());
         assert_eq!(without.referral, 0);
         assert_eq!(without.protocol, 5_000_000); // 40 + 10
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn rounding_remainder_always_lands_on_protocol() {
         // 7 kelvin tidak bisa dibagi rapi 40/30/20/10
-        let s = split(7, &cfg(), true).unwrap();
+        let s = split(7, &sample_fee_cfg(), true).unwrap();
         assert_eq!(s.partner, 2); // 7*30/100 = 2.1 -> 2
         assert_eq!(s.creator, 1); // 7*20/100 = 1.4 -> 1
         assert_eq!(s.referral, 0); // 7*10/100 = 0.7 -> 0
@@ -214,7 +214,7 @@ mod tests {
     fn ledger_accrues_and_drains_exactly() {
         let mut l = FeeLedger::default();
         for _ in 0..50 {
-            l.accrue(&split(10_000_000, &cfg(), true).unwrap()).unwrap();
+            l.accrue(&split(10_000_000, &sample_fee_cfg(), true).unwrap()).unwrap();
         }
         assert_eq!(l.protocol, 200_000_000);
         assert_eq!(l.partner, 150_000_000);
@@ -241,7 +241,7 @@ mod tests {
             let gross = i * 1_000_000;
             let fee = gross / 100;
             let net = gross - fee;
-            let s = split(fee, &cfg(), i % 3 == 0).unwrap();
+            let s = split(fee, &sample_fee_cfg(), i % 3 == 0).unwrap();
 
             // yang benar-benar masuk vault: net + bagian yang ditahan.
             // referral keluar seketika.
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn zero_fee_is_a_no_op() {
-        let s = split(0, &cfg(), true).unwrap();
+        let s = split(0, &sample_fee_cfg(), true).unwrap();
         assert_eq!(s.total(), 0);
     }
 }
