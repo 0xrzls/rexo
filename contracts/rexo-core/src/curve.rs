@@ -487,7 +487,7 @@ impl CurveState {
     }
 
     /// Gross RLO untuk menuntaskan kurva dari posisi sekarang.
-    pub fn quote_to_graduate(&self, _cfg: &CurveConfig) -> Result<u128, CurveError> {
+    pub fn quote_to_graduate(&self, cfg: &CurveConfig) -> Result<u128, CurveError> {
         if self.complete {
             return Ok(0);
         }
