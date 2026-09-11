@@ -18,7 +18,6 @@
 use rialo_s_program::{account_info::AccountInfo, msg, pubkey::Pubkey};
 
 use crate::config::{ConfigPatch, LaunchConfig, MIGRATE_EXTERNAL};
-use crate::curve::CurveState;
 use crate::errors::RexoError;
 use crate::fees::{self, Payee};
 use crate::state::{narrow, Launch, STATE_MIGRATED, STATE_MIGRATING};
@@ -339,7 +338,6 @@ fn settle_buy(
     }
     token::transfer_out(
         program_id,
-        acc.launch.key,
         acc.mint,
         acc.base_vault,
         acc.trader_token_account,
@@ -400,7 +398,7 @@ pub fn claim_fee<'a>(
 pub fn claim_creator_tokens<'a>(
     program_id: &Pubkey,
     l: &mut Launch,
-    launch_key: &Pubkey,
+    _launch_key: &Pubkey,
     mint: &AccountInfo<'a>,
     base_vault: &AccountInfo<'a>,
     creator_token_account: &AccountInfo<'a>,
@@ -419,7 +417,6 @@ pub fn claim_creator_tokens<'a>(
 
     token::transfer_out(
         program_id,
-        launch_key,
         mint,
         base_vault,
         creator_token_account,
@@ -450,7 +447,7 @@ pub struct MigrateResult {
 pub fn migrate<'a>(
     program_id: &Pubkey,
     l: &mut Launch,
-    launch_key: &Pubkey,
+    _launch_key: &Pubkey,
     mint: &AccountInfo<'a>,
     base_vault: &AccountInfo<'a>,
     quote_vault: &AccountInfo<'a>,
@@ -476,7 +473,6 @@ pub fn migrate<'a>(
 
     token::transfer_out(
         program_id,
-        launch_key,
         mint,
         base_vault,
         lp_base_dest,
