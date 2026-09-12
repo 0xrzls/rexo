@@ -3,7 +3,7 @@
   "version": "0.12.2",
   "description": "Canonical Meme Coin Launchpad Engine for Rialo Venus",
   "target": "riscv32emc-unknown-none-polkavm",
-  "programId": "AB1qGE64GVzPKjmCVcVLQMutkTNiq5J99Tz7rXDTVBMm",
+  "programId": "2qcMNcdhxeYc7TuQe2FB9Mm8tazNQxpAM8wYiTvBcMbc",
   "loader": "RiscVLoader11111111111111111111111111111111",
   "network": "devnet",
   "sha256": "e9302929e3788bd948a89221b229c9d2a2ba74aaaefaf9929cb55939963cdb56",
@@ -131,7 +131,7 @@
       "args": []
     }
   ],
-  "deployedAt": "2026-09-12T12:47:40.530Z",
+  "deployedAt": "2026-09-12T12:52:01.061494+00:00",
   "binarySize": 197214,
   "polkavm": "rexo_core.polkavm"
 }

@@ -1,9 +1,9 @@
 {
-  "programId": "78QL5dHd2WMNhE9veDkWBBk5NCxAb3DL4stGC2aiaTyP",
+  "programId": "2qcMNcdhxeYc7TuQe2FB9Mm8tazNQxpAM8wYiTvBcMbc",
   "network": "devnet",
   "loader": "RiscVLoader11111111111111111111111111111111",
   "executable": true,
-  "deployedAt": "2026-09-11T14:38:27.263633+00:00",
-  "runNumber": 1359,
+  "deployedAt": "2026-09-12T12:52:01.061494+00:00",
+  "runNumber": 1364,
   "replacedPrevious": true
 }
