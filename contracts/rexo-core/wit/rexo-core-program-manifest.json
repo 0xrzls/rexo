@@ -2,7 +2,7 @@
   "name": "rexo-core",
   "version": "0.12.2",
   "description": "Canonical Meme Coin Launchpad Engine for Rialo Venus",
-  "programId": "FZcEyNcWaWUt9njVp6eJYmJnArMcVSQtMevsVJYZLg89",
+  "programId": "AB1qGE64GVzPKjmCVcVLQMutkTNiq5J99Tz7rXDTVBMm",
   "target": "riscv32emc-unknown-none-polkavm",
   "instructions": [
     {
