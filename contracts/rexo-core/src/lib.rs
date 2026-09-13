@@ -242,6 +242,9 @@ rialo! {
             control fn claim_protocol_fee(&mut self) -> ProgramResult {
                 let accs = self.accounts;
                 let acc = crate::accounts::parse_claim(self.program_id, accs)?;
+                if *acc.signer.key != self.protocol_treasury {
+                    return Err(crate::errors::RexoError::Unauthorized.into());
+                }
                 let mut l = self.load();
                 let amt = crate::ops::claim_fee(
                     &mut l, crate::fees::Payee::Protocol, acc.quote_vault, acc.recipient,
@@ -254,6 +257,9 @@ rialo! {
             control fn claim_partner_fee(&mut self) -> ProgramResult {
                 let accs = self.accounts;
                 let acc = crate::accounts::parse_claim(self.program_id, accs)?;
+                if *acc.signer.key != self.partner {
+                    return Err(crate::errors::RexoError::NotPartner.into());
+                }
                 let mut l = self.load();
                 let amt = crate::ops::claim_fee(
                     &mut l, crate::fees::Payee::Partner, acc.quote_vault, acc.recipient,
@@ -266,6 +272,9 @@ rialo! {
             control fn claim_creator_fee(&mut self) -> ProgramResult {
                 let accs = self.accounts;
                 let acc = crate::accounts::parse_claim(self.program_id, accs)?;
+                if *acc.signer.key != self.creator {
+                    return Err(crate::errors::RexoError::NotCreator.into());
+                }
                 let mut l = self.load();
                 let amt = crate::ops::claim_fee(
                     &mut l, crate::fees::Payee::Creator, acc.quote_vault, acc.recipient,
@@ -285,6 +294,9 @@ rialo! {
                 let now = self.unix_timestamp() as u64;
                 let accs = self.accounts;
                 let acc = crate::accounts::parse_creator_claim(self.program_id, accs)?;
+                if *acc.signer.key != self.creator {
+                    return Err(crate::errors::RexoError::NotCreator.into());
+                }
                 let mut l = self.load();
                 let amt = crate::ops::claim_creator_tokens(
                     self.program_id,
